@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Move one servo:  move.py <servo 1-6> <position 0-1000> [duration_ms]
+"""Wired (USB) single-servo move, in degrees:
 
-Positions are servo units (~0.24 degrees each, 500 = center). Durations
-default to a calm 1500 ms — never command a big jump with a tiny duration.
-Servo map: 1 gripper · 2 wrist roll · 3 wrist bend · 4 elbow · 5 shoulder · 6 base
+    move.py <servo 1-6> <degrees -120..120> [duration_ms]
+    move.py --units <servo> <units 0-1000> [duration_ms]   # raw escape hatch
+
+0 deg = the servo's midpoint; positive = toward unit 1000. Soft limits from
+angles.LIMITS_DEG apply. Servo map: 1 gripper · 2 wrist roll · 3 wrist bend ·
+4 elbow · 5 shoulder · 6 base
 """
 import sys
+
 import xarm
 
-if len(sys.argv) < 3:
+from angles import servo_units, units_to_deg
+
+args = [a for a in sys.argv[1:] if a != "--units"]
+raw = "--units" in sys.argv
+if len(args) < 2:
     raise SystemExit(__doc__)
-sid, pos = int(sys.argv[1]), int(sys.argv[2])
-dur = int(sys.argv[3]) if len(sys.argv) > 3 else 1500
-if not (1 <= sid <= 6 and 0 <= pos <= 1000):
-    raise SystemExit("servo must be 1-6, position 0-1000")
+sid = int(args[0])
+dur = int(args[2]) if len(args) > 2 else 1500
+units = int(args[1]) if raw else servo_units(sid, float(args[1]))
 
 arm = xarm.Controller("USB")
-arm.setPosition(sid, pos, dur, wait=True)
-print(f"servo {sid} -> {pos} ({dur} ms), now at {arm.getPosition(sid)}")
+arm.setPosition(sid, units, dur, wait=True)
+now = arm.getPosition(sid)
+print(f"servo {sid} -> unit {units}, now at {now} ({units_to_deg(now):+.1f} deg)")

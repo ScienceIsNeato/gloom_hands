@@ -93,11 +93,27 @@ class BleArm:
     def set_position(
         self, moves: int | list[tuple[int, int]], pos: int | None = None, duration_ms: int = 1500
     ) -> None:
-        """set_position(3, 600) or set_position([(3, 600), (6, 400)])."""
+        """set_position(3, 600) or set_position([(3, 600), (6, 400)]). Raw units."""
         if isinstance(moves, int):
             moves = [(moves, int(pos))]  # type: ignore[arg-type]
         packet = servo_move_packet(moves, duration_ms)
         self._run(self._client.write_gatt_char(self._char, packet, response=False))
+
+    def set_angle(
+        self,
+        moves: int | list[tuple[int, float]],
+        deg: float | None = None,
+        duration_ms: int = 1500,
+    ) -> None:
+        """Centered degrees (0.0 = midpoint, ±120 span), soft-limited per servo.
+
+        set_angle(6, 30.0) or set_angle([(6, 30.0), (1, -15.0)]).
+        """
+        from angles import servo_units
+
+        if isinstance(moves, int):
+            moves = [(moves, float(deg))]  # type: ignore[arg-type]
+        self.set_position([(sid, servo_units(sid, d)) for sid, d in moves], duration_ms=duration_ms)
 
     def close(self) -> None:
         if self._client is not None:

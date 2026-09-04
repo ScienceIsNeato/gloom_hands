@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Wireless single-servo move:  move_ble.py <servo 1-6> <position 0-1000> [duration_ms]
+"""Wireless single-servo move, in degrees:
 
-Servo map: 1 gripper · 2 wrist roll · 3 wrist bend · 4 elbow · 5 shoulder · 6 base
+    move_ble.py <servo 1-6> <degrees -120..120> [duration_ms]
+    move_ble.py --units <servo> <units 0-1000> [duration_ms]   # raw escape hatch
+
+0 deg = the servo's midpoint; positive = toward unit 1000. Soft limits from
+angles.LIMITS_DEG apply. Servo map: 1 gripper · 2 wrist roll · 3 wrist bend ·
+4 elbow · 5 shoulder · 6 base
 """
 import sys
 import time
 
+from angles import servo_units
 from ble_arm import BleArm
 
-if len(sys.argv) < 3:
+args = [a for a in sys.argv[1:] if a != "--units"]
+raw = "--units" in sys.argv
+if len(args) < 2:
     raise SystemExit(__doc__)
-sid, pos = int(sys.argv[1]), int(sys.argv[2])
-dur = int(sys.argv[3]) if len(sys.argv) > 3 else 1500
+sid = int(args[0])
+dur = int(args[2]) if len(args) > 2 else 1500
+units = int(args[1]) if raw else servo_units(sid, float(args[1]))
 
 arm = BleArm()
-arm.set_position(sid, pos, dur)
+arm.set_position(sid, units, dur)
 time.sleep(dur / 1000 + 0.2)
-print(f"sent: servo {sid} -> {pos} over {dur} ms")
+what = f"{args[1]} units" if raw else f"{float(args[1]):+.1f} deg (unit {units})"
+print(f"sent: servo {sid} -> {what} over {dur} ms")
 arm.close()
