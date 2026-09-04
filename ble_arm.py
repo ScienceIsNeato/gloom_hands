@@ -36,26 +36,30 @@ def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
 class BleArm:
     """Synchronous facade over an async BLE link to the arm."""
 
-    def __init__(self, name_hint: str = "hiwonder", timeout: float = 12.0) -> None:
+    def __init__(
+        self,
+        name_hints: tuple[str, ...] = ("xarm", "hiwonder", "lobot"),
+        timeout: float = 12.0,
+    ) -> None:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._thread.start()
         self._client: BleakClient | None = None
         self._char = None
-        self._run(self._connect(name_hint, timeout))
+        self._run(self._connect(name_hints, timeout))
 
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
-    async def _connect(self, name_hint: str, timeout: float) -> None:
+    async def _connect(self, name_hints: tuple[str, ...], timeout: float) -> None:
         device = None
         for d in await BleakScanner.discover(timeout=timeout):
-            if d.name and name_hint in d.name.lower():
+            if d.name and any(h in d.name.lower() for h in name_hints):
                 device = d
                 break
         if device is None:
             raise RuntimeError(
-                f"no BLE device named like {name_hint!r} found — arm powered on? "
+                f"no BLE device named like {name_hints} found — arm powered on? "
                 "phone app fully closed (it hogs the only connection)?"
             )
         self._client = BleakClient(device)
