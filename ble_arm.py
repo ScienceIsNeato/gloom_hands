@@ -18,11 +18,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
 SERVICE_HINT = "ffe0"
 CMD_SERVO_MOVE = 0x03
+# The arm's address is cached after the first find so later runs connect
+# in ~1-2s instead of sitting through a full discovery sweep.
+ADDRESS_CACHE = Path(__file__).with_name(".xarm_ble_address")
 
 
 def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
@@ -53,15 +57,25 @@ class BleArm:
 
     async def _connect(self, name_hints: tuple[str, ...], timeout: float) -> None:
         device = None
-        for d in await BleakScanner.discover(timeout=timeout):
-            if d.name and any(h in d.name.lower() for h in name_hints):
-                device = d
-                break
+        # Fast path: directed lookup of the cached address (returns the
+        # moment the arm advertises; stale cache falls through to a scan).
+        if ADDRESS_CACHE.exists():
+            addr = ADDRESS_CACHE.read_text().strip()
+            if addr:
+                device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
+        if device is None:
+            # Filtered scan: stops as soon as a matching name appears
+            # instead of sweeping for the full timeout.
+            device = await BleakScanner.find_device_by_filter(
+                lambda d, ad: bool(d.name and any(h in d.name.lower() for h in name_hints)),
+                timeout=timeout,
+            )
         if device is None:
             raise RuntimeError(
                 f"no BLE device named like {name_hints} found — arm powered on? "
                 "phone app fully closed (it hogs the only connection)?"
             )
+        ADDRESS_CACHE.write_text(device.address)
         self._client = BleakClient(device)
         await self._client.connect()
         # The vendor UART service: pick its writable characteristic.
