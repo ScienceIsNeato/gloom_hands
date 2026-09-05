@@ -1,4 +1,9 @@
-# xarm_control
+# gloom_hands
+
+Teaching a Hiwonder xArm 1S to be a gloom hand from Tears of the
+Kingdom. Step one (done): direct computer control. Step two (done): the
+hunting animation — `./gloom_hand_demo.py` auto-connects over Bluetooth
+and starts sweeping for victims. Step three: eyes.
 
 Direct computer control of the Hiwonder / LewanSoul **xArm 1S** from macOS —
 no bundled controller, no phone app. Two transports, same protocol
@@ -64,3 +69,10 @@ cousin, not this arm.
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless
 - `ble_arm.py` — the BLE transport (scan → connect → LOBOT packets)
+
+## Note for cloners
+
+Script shebangs point at this project's venv by absolute path (so
+`./script.py` works without activation). After cloning elsewhere, either
+recreate the venv at `.venv/` and fix the shebang paths, or just run
+everything as `.venv/bin/python script.py`.
