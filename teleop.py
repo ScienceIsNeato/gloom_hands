@@ -15,6 +15,13 @@ USB reads the arm's actual pose at startup; BLE can't read positions with
 this simple write-only link, so it gently centers everything first and
 tracks from there.
 """
+# Re-exec into the project venv (if present) so ./script.py works without
+# activation — and without hardcoding any machine-specific path.
+import os as _os, sys as _sys
+_venv_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".venv")
+_venv_py = _os.path.join(_venv_dir, "bin", "python")
+if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspath(_venv_dir):
+    _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import curses
 import sys
 

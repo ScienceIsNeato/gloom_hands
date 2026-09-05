@@ -72,7 +72,6 @@ cousin, not this arm.
 
 ## Note for cloners
 
-Script shebangs point at this project's venv by absolute path (so
-`./script.py` works without activation). After cloning elsewhere, either
-recreate the venv at `.venv/` and fix the shebang paths, or just run
-everything as `.venv/bin/python script.py`.
+Scripts re-exec themselves into `./.venv/bin/python` when that venv
+exists, so `./script.py` works without activation. After cloning, create
+it once: `python3 -m venv .venv && .venv/bin/pip install xarm hidapi pyserial bleak`.

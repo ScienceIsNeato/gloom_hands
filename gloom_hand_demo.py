@@ -16,8 +16,13 @@ terminal granted Bluetooth permission on macOS.
 Servo map: 1 gripper · 2 wrist roll · 3 wrist bend · 4 elbow · 5 shoulder · 6 base
 Angles are centered degrees: 0.0 = servo midpoint, ±120 span.
 """
-from __future__ import annotations
-
+# Re-exec into the project venv (if present) so ./script.py works without
+# activation — and without hardcoding any machine-specific path.
+import os as _os, sys as _sys
+_venv_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".venv")
+_venv_py = _os.path.join(_venv_dir, "bin", "python")
+if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspath(_venv_dir):
+    _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import asyncio
 import math
 import random
