@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The robot arm obeys the laptop now, wired or wireless, and has its first personality: a Zelda gloom hand that sweeps around looking for victims",
-    "direction": "Tune the hunting pose on the real hardware, then give it eyes — a webcam so it locks onto people it finds",
-    "last_update": "2026-09-05T07:18:51Z"
+    "status": "The gloom hand has eyes: point a webcam at the room and the arm swings toward whoever moves, then goes back to hunting when they hold still. Tested against video, not yet on the real arm.",
+    "direction": "Run it on the arm to settle which way is left, tune the camera position, then try it on the small computer it will live on",
+    "last_update": "2026-09-07T22:35:00Z"
   }
 }

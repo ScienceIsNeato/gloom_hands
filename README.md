@@ -3,7 +3,9 @@
 Teaching a Hiwonder xArm 1S to be a gloom hand from Tears of the
 Kingdom. Step one (done): direct computer control. Step two (done): the
 hunting animation — `./gloom_hand_demo.py` auto-connects over Bluetooth
-and starts sweeping for victims. Step three: eyes.
+and starts sweeping for victims. Step three (done, awaiting the arm):
+eyes — `./gloom.py --eyes` watches a webcam and locks the base onto
+whoever moves.
 
 Direct computer control of the Hiwonder / LewanSoul **xArm 1S** from macOS —
 no bundled controller, no phone app. Two transports, same protocol
@@ -19,6 +21,7 @@ underneath (LOBOT packets: `0x55 0x55 <len> <cmd> <params>`):
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install xarm hidapi pyserial bleak
+.venv/bin/pip install -e ../HalloweenTracker     # the eyes (or: git+https://github.com/ScienceIsNeato/HalloweenTracker)
 ```
 
 ## Getting started — wired first
@@ -48,6 +51,38 @@ packets as USB. Note the xArm 1S uses bus-servo units **0–1000**
 (≈0.24°/unit, 500 = center) — the LeArm's 500–2500 range is its PWM
 cousin, not this arm.
 
+## Eyes
+
+The tracking comes from the sibling
+[HalloweenTracker](https://github.com/ScienceIsNeato/HalloweenTracker)
+package: it finds the person in the webcam frame and works out their
+bearing from the **base pivot**, not from the camera, so the camera can
+sit wherever is convenient. Describe where it is in the `CAMERA` block at
+the top of `gloom.py` (metres forward and left of the pivot, and which
+way the lens points), plus its horizontal field of view.
+
+```bash
+./gloom.py --eyes                  # hunt, and lock on when someone moves
+./gloom.py --eyes --dry            # no arm: print the base headings it would send
+./gloom.py --eyes --video-src 1    # a different camera, or a video file
+```
+
+While locked the base follows the person and the writhe continues; after
+`LOST_AFTER_S` seconds with nobody moving it eases back into the sweep
+from wherever it is. Calibrate before the first hunt:
+
+1. `python -m halloween_tracker.preview --hfov 60` — check a known object
+   sits at the right angle; adjust `--hfov`, add `--mirrored` if left and
+   right are swapped, then copy the values into `CAMERA`.
+2. Set `BASE_SIGN` in `gloom.py`: +1 if positive servo-6 degrees turn the
+   base left, -1 if right. `./move_ble.py 6 30` tells you.
+3. `python -m halloween_tracker.preview --bench 60` on the computer that
+   will run it. The default detector is frame differencing, which costs a
+   few milliseconds. The HOG person detector (`--detector person`) sees
+   people who stand still but is much heavier on a small board.
+
+`gloom_hand_demo.py` stays the blind, single-file version on purpose.
+
 ## Servo map (xArm 1S)
 
 ```
@@ -65,6 +100,8 @@ cousin, not this arm.
 
 ## Files
 
+- `gloom.py` — the hunt; `--eyes` adds webcam tracking, `--dry` runs it without an arm
+- `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless
@@ -74,4 +111,6 @@ cousin, not this arm.
 
 Scripts re-exec themselves into `./.venv/bin/python` when that venv
 exists, so `./script.py` works without activation. After cloning, create
-it once: `python3 -m venv .venv && .venv/bin/pip install xarm hidapi pyserial bleak`.
+it once: `python3 -m venv .venv && .venv/bin/pip install xarm hidapi pyserial bleak`,
+plus `.venv/bin/pip install git+https://github.com/ScienceIsNeato/HalloweenTracker`
+for `--eyes`.
