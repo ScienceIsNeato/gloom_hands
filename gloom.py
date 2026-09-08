@@ -8,7 +8,7 @@ searching when it finds one.
     ./gloom.py --eyes          # webcam: lock the base onto whoever moves
     ./gloom.py --eyes --dry    # no arm: print what it would send (test the eyes)
     ./gloom.py --eyes --dry --show      # ...and open a window showing what it sees
-    ./gloom.py --eyes --detector person # HOG person detector instead of frame differencing
+    ./gloom.py --eyes --detector face   # Haar face detector instead of frame differencing
     ./gloom.py --eyes --video-src 1     # another camera, or a video file
 
 All values are CENTERED DEGREES (0.0 = servo midpoint, +/-120 span,
@@ -84,7 +84,7 @@ CAMERA = dict(x_m=0.0, y_m=0.0, yaw_deg=0.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
 CAPTURE_SIZE = (1280, 720)
-DETECTOR = "motion"     # "motion" (cheap, needs movement) or "person" (HOG; measure with --bench first)
+DETECTOR = "motion"     # "motion" (cheap, needs movement), "face" (Haar, works up close), "person" (HOG, whole bodies far away)
 DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch (top, bottom)
 BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
 LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
@@ -227,8 +227,8 @@ def main() -> None:
     p.add_argument("--dry", action="store_true", help="no arm: print base headings")
     p.add_argument("--eyes", action="store_true", help="track people with the webcam")
     p.add_argument("--video-src", default=VIDEO_SRC, help="camera index or video file")
-    p.add_argument("--detector", default=DETECTOR, choices=("motion", "person"),
-                   help="frame differencing (cheap) or HOG person detection")
+    p.add_argument("--detector", default=DETECTOR, choices=("motion", "face", "person"),
+                   help="frame differencing (cheap), Haar face detection, or HOG person detection")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
     a = p.parse_args()
 
