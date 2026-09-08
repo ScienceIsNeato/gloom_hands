@@ -80,13 +80,15 @@ SNAP_MS = 280           # how fast the snap lands (small ms = violent)
 # once range is estimated from the person's height in the frame; with a
 # zero offset it does not matter at all. Dial these in with:
 #   ./eyes.py --hfov .. --cam-x .. --cam-y .. --cam-yaw ..
-CAMERA = dict(x_m=0.0, y_m=0.0, yaw_deg=0.0, hfov_deg=60.0, mirrored=False)
+# Current rig: the camera is ~15 ft in front of the arm, facing it (the
+# arm points straight at the camera at base 0), so yaw is 180.
+CAMERA = dict(x_m=4.57, y_m=0.0, yaw_deg=180.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
 CAPTURE_SIZE = (1280, 720)
 # "background": static camera, learns the empty scene, anything that differs is the person (default, cheap)
 # "motion": legacy frame differencing, only sees movement · "face": Haar, works up close · "person": HOG, whole bodies far away
-DETECTOR = "background"
+DETECTOR = "face"
 DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch (top, bottom)
 BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
 LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
