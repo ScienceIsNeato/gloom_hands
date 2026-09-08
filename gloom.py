@@ -90,6 +90,7 @@ DETECTOR = "background"
 DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch (top, bottom)
 BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
 LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
+TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
 LOST_AFTER_S = 4.0      # nobody seen for this long -> back to the hunt
 
 
@@ -127,11 +128,13 @@ class DryBackend:
 class Eyes:
     """Webcam -> bearing of the victim from the base pivot, in centered
     degrees for servo 6 (sign applied). A background thread keeps the
-    newest frame so the hunt loop never reads a stale one."""
+    newest frame so the hunt loop never reads a stale one. Detections go
+    through halloween_tracker's Tracker, so the victim is followed, not
+    rediscovered, frame to frame."""
 
     def __init__(self, video_src: str, detector: str, show: bool = False) -> None:
         import cv2
-        from halloween_tracker import CameraPose, Locator, Smoother, make_detector
+        from halloween_tracker import CameraPose, Locator, Smoother, make_tracked
 
         self.kind = detector
         self._show = show
@@ -146,8 +149,10 @@ class Eyes:
             raise SystemExit(f"could not open camera {video_src!r}")
         self._cam.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_SIZE[0])
         self._cam.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_SIZE[1])
-        kw = {"roi": DETECT_ROI} if detector == "motion" else {}
-        self._det = make_detector(detector, **kw)
+        # Tracker on top of the detector: a person, once found, is followed
+        # across frames (coasting on their last motion when the detector
+        # blinks) instead of being rediscovered from scratch every tick.
+        self._det = make_tracked(detector, {"motion": {"roi": DETECT_ROI}}, coast_s=TRACK_COAST_S)
         self._loc = Locator(CameraPose(**CAMERA), person_height_m=PERSON_HEIGHT_M)
         self._smooth = Smoother(window=LOCK_SMOOTH)
         self._frame = None
