@@ -5,7 +5,7 @@ searching when it finds one.
 
     ./gloom.py                 # wireless (BLE), blind hunt
     ./gloom.py --usb           # wired
-    ./gloom.py --eyes          # webcam: lock the base onto whoever moves
+    ./gloom.py --eyes          # webcam: lock the base onto whoever is there
     ./gloom.py --eyes --dry    # no arm: print what it would send (test the eyes)
     ./gloom.py --eyes --dry --show      # ...and open a window showing what it sees
     ./gloom.py --eyes --detector face   # Haar face detector instead of frame differencing
@@ -84,11 +84,13 @@ CAMERA = dict(x_m=0.0, y_m=0.0, yaw_deg=0.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
 CAPTURE_SIZE = (1280, 720)
-DETECTOR = "motion"     # "motion" (cheap, needs movement), "face" (Haar, works up close), "person" (HOG, whole bodies far away)
+# "background": static camera, learns the empty scene, anything that differs is the person (default, cheap)
+# "motion": legacy frame differencing, only sees movement · "face": Haar, works up close · "person": HOG, whole bodies far away
+DETECTOR = "background"
 DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch (top, bottom)
 BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
 LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
-LOST_AFTER_S = 3.0      # nobody moved for this long -> back to the hunt
+LOST_AFTER_S = 4.0      # nobody seen for this long -> back to the hunt
 
 
 class Backend:
@@ -227,8 +229,8 @@ def main() -> None:
     p.add_argument("--dry", action="store_true", help="no arm: print base headings")
     p.add_argument("--eyes", action="store_true", help="track people with the webcam")
     p.add_argument("--video-src", default=VIDEO_SRC, help="camera index or video file")
-    p.add_argument("--detector", default=DETECTOR, choices=("motion", "face", "person"),
-                   help="frame differencing (cheap), Haar face detection, or HOG person detection")
+    p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "person"),
+                   help="background subtraction (default), frame differencing, Haar face, or HOG person")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
     a = p.parse_args()
 

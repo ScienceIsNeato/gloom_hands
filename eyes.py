@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Look through the gloom hand's eyes without moving the arm.
 
-    ./eyes.py                     # motion detector, using gloom.py's CAMERA settings
+    ./eyes.py                     # background detector, using gloom.py's CAMERA settings
     ./eyes.py --detector face     # Haar face detector (person = HOG, whole bodies)
     ./eyes.py --bench 60          # ms/frame for both detectors on this machine
     ./eyes.py --video-src walk.avi
 
-Keys in the window:  d  switch detector (motion -> face -> person)   ESC  quit
+Keys in the window:  d  switch detector (background -> motion -> face -> person)   s  snapshot   ESC  quit
 
 Wraps halloween_tracker.preview (installed in ./.venv) and fills in the
 camera pose and field of view from gloom.py's CAMERA block, so what you
