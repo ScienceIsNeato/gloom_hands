@@ -234,8 +234,8 @@ def main() -> None:
     p.add_argument("--dry", action="store_true", help="no arm: print base headings")
     p.add_argument("--eyes", action="store_true", help="track people with the webcam")
     p.add_argument("--video-src", default=VIDEO_SRC, help="camera index or video file")
-    p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "person"),
-                   help="background subtraction (default), frame differencing, Haar face, or HOG person")
+    p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "yunet", "haar", "person"),
+                   help="background subtraction (default), frame differencing, face (YuNet, or Haar without its model), or HOG person")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
     a = p.parse_args()
 
