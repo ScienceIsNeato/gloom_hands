@@ -21,7 +21,7 @@ underneath (LOBOT packets: `0x55 0x55 <len> <cmd> <params>`):
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install xarm hidapi pyserial bleak
-.venv/bin/pip install -e ../HalloweenTracker     # the eyes (or: git+https://github.com/ScienceIsNeato/HalloweenTracker)
+.venv/bin/pip install numpy 'opencv-python<5'    # the eyes (4.x: the 5.0 wheels dropped the face detectors)
 ```
 
 ## Getting started — wired first
@@ -53,11 +53,10 @@ cousin, not this arm.
 
 ## Eyes
 
-The tracking comes from the sibling
-[HalloweenTracker](https://github.com/ScienceIsNeato/HalloweenTracker)
-package: it finds the person in the webcam frame and works out their
-bearing from the **base pivot**, not from the camera, so the camera can
-sit wherever is convenient. Describe where it is in the `CAMERA` block at
+The `vision/` package finds the person in the webcam frame and works out
+their bearing from the **base pivot**, not from the camera, so the camera
+can sit wherever is convenient. (Its frame-differencing detector was
+ported from the 2024 HalloweenTracker head; the rest is new.) Describe where it is in the `CAMERA` block at
 the top of `gloom.py` (metres forward and left of the pivot, and which
 way the lens points), plus its horizontal field of view.
 
@@ -69,8 +68,13 @@ way the lens points), plus its horizontal field of view.
 ./gloom.py --eyes --video-src 1    # a different camera, or a video file
 ```
 
-Everything runs from this folder; the tracker package is installed into
-`.venv`, and `eyes.py` feeds it the same `CAMERA` settings `gloom.py` uses.
+`eyes.py` feeds the preview the same `CAMERA` settings `gloom.py` uses.
+Detectors: `background` (default; learns the static scene, anything that
+differs is the person), `face` (YuNet when its model is in
+`vision/models/`, else Haar cascades), `motion` (legacy differencing),
+`person` (HOG, whole bodies). Every detection goes through a tracker that
+follows the person across frames and holds position when the detector
+blinks. Press `d` in the window to cycle detectors, `s` to save a frame.
 
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep
@@ -106,6 +110,7 @@ from wherever it is. Calibrate before the first hunt:
 
 - `gloom.py` — the hunt; `--eyes` adds webcam tracking, `--dry` runs it without an arm
 - `eyes.py` — preview and benchmark the tracking with gloom.py's camera settings
+- `vision/` — detectors, camera geometry, tracker (`detector.py`, `geometry.py`, `tracking.py`, `preview.py`)
 - `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
@@ -116,6 +121,4 @@ from wherever it is. Calibrate before the first hunt:
 
 Scripts re-exec themselves into `./.venv/bin/python` when that venv
 exists, so `./script.py` works without activation. After cloning, create
-it once: `python3 -m venv .venv && .venv/bin/pip install xarm hidapi pyserial bleak`,
-plus `.venv/bin/pip install git+https://github.com/ScienceIsNeato/HalloweenTracker`
-for `--eyes`.
+it once: `python3 -m venv .venv && .venv/bin/pip install xarm hidapi pyserial bleak numpy 'opencv-python<5'`.

@@ -18,7 +18,7 @@ soft-limited per angles.LIMITS_DEG). Three layers of creep, tunable below:
   3. TWITCH — random freezes ("...did it hear something?") and sudden fast
               snaps to a new heading
 ...and with --eyes a fourth:
-  4. LOCK   — the halloween_tracker package finds the person in the webcam
+  4. LOCK   — the vision package finds the person in the webcam
               frame and works out their bearing from the BASE PIVOT (the
               camera can sit anywhere: see CAMERA below). The base snaps to
               them and follows; when nobody has moved for LOST_AFTER_S the
@@ -79,7 +79,7 @@ SNAP_MS = 280           # how fast the snap lands (small ms = violent)
 # A single camera gives bearing but not range, so the offset only bites
 # once range is estimated from the person's height in the frame; with a
 # zero offset it does not matter at all. Dial these in with:
-#   python -m halloween_tracker.preview --hfov .. --cam-x .. --cam-y .. --cam-yaw ..
+#   ./eyes.py --hfov .. --cam-x .. --cam-y .. --cam-yaw ..
 CAMERA = dict(x_m=0.0, y_m=0.0, yaw_deg=0.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
@@ -129,12 +129,12 @@ class Eyes:
     """Webcam -> bearing of the victim from the base pivot, in centered
     degrees for servo 6 (sign applied). A background thread keeps the
     newest frame so the hunt loop never reads a stale one. Detections go
-    through halloween_tracker's Tracker, so the victim is followed, not
+    through vision.tracking.Tracker, so the victim is followed, not
     rediscovered, frame to frame."""
 
     def __init__(self, video_src: str, detector: str, show: bool = False) -> None:
         import cv2
-        from halloween_tracker import CameraPose, Locator, Smoother, make_tracked
+        from vision import CameraPose, Locator, Smoother, make_tracked
 
         self.kind = detector
         self._show = show
@@ -199,7 +199,7 @@ class Eyes:
         return self._smooth.push(deg), t
 
     def _draw(self, d, t, ms: float) -> None:  # noqa: ANN001
-        from halloween_tracker.preview import draw
+        from vision.preview import draw
 
         view = self._det.last_frame.copy()
         draw(view, d, t, self._det.roi_y0, ms, self.kind)

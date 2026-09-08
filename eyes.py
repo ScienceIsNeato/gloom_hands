@@ -8,7 +8,7 @@
 
 Keys in the window:  d  switch detector (background -> motion -> face -> person)   s  snapshot   ESC  quit
 
-Wraps halloween_tracker.preview (installed in ./.venv) and fills in the
+Wraps vision.preview and fills in the
 camera pose and field of view from gloom.py's CAMERA block, so what you
 calibrate here is exactly what the hunt uses. Any flag you pass overrides
 those defaults; see ./eyes.py --help for the full list.
@@ -22,7 +22,7 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import sys
 
-from halloween_tracker.preview import main
+from vision.preview import main
 
 from gloom import CAMERA, CAPTURE_SIZE, DETECT_ROI, DETECTOR, PERSON_HEIGHT_M, VIDEO_SRC
 
