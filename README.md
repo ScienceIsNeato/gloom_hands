@@ -69,10 +69,10 @@ way the lens points), plus its horizontal field of view.
 ```
 
 `eyes.py` feeds the preview the same `CAMERA` settings `gloom.py` uses.
-Detectors: `background` (default; learns the static scene, anything that
-differs is the person), `face` (YuNet when its model is in
-`vision/models/`, else Haar cascades), `motion` (legacy differencing),
-`person` (HOG, whole bodies). Every detection goes through a tracker that
+Detectors: `face` (default; YuNet when its model is in `vision/models/`,
+else Haar cascades), `background` (learns the static scene, anything that
+differs is the person; cheapest option that keeps a still person),
+`motion` (legacy differencing), `person` (HOG, whole bodies). Every detection goes through a tracker that
 follows the person across frames and holds position when the detector
 blinks. Press `d` in the window to cycle detectors, `s` to save a frame.
 

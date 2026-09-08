@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Look through the gloom hand's eyes without moving the arm.
 
-    ./eyes.py                     # background detector, using gloom.py's CAMERA settings
+    ./eyes.py                     # face detector, using gloom.py's CAMERA settings
     ./eyes.py --detector face     # Haar face detector (person = HOG, whole bodies)
     ./eyes.py --bench 60          # ms/frame for both detectors on this machine
     ./eyes.py --video-src walk.avi

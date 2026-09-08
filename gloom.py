@@ -86,8 +86,9 @@ CAMERA = dict(x_m=4.57, y_m=0.0, yaw_deg=180.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
 CAPTURE_SIZE = (1280, 720)
-# "background": static camera, learns the empty scene, anything that differs is the person (default, cheap)
-# "motion": legacy frame differencing, only sees movement · "face": Haar, works up close · "person": HOG, whole bodies far away
+# "face": YuNet face detection (default; Haar cascades if the model is missing) · "background": static camera,
+# learns the empty scene, anything that differs is the person (cheapest that keeps a still person) ·
+# "motion": legacy frame differencing, only sees movement · "person": HOG, whole bodies far away
 DETECTOR = "face"
 DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch (top, bottom)
 BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
@@ -273,6 +274,7 @@ def main() -> None:
                             f"{t.cam_bearing_deg:+.1f} deg -> base {base:+.1f} deg — snapping"
                         )
                         locked = True
+                        last_seen = now
                         arm.send({6: base}, SNAP_MS)
                         time.sleep(SNAP_MS / 1000 + 0.1)
                         continue

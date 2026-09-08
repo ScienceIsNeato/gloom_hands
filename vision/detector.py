@@ -481,7 +481,7 @@ def make_detector(kind: str, **kwargs):  # noqa: ANN201 - factory over all detec
         if not _warned_haar:
             _warned_haar = True
             print(f"[vision] 'face' is using Haar cascades; for the far better YuNet detector "
-                  f"put {YUNET_MODEL} in vision/models/ (see YUNET_URL)")
+                  f"download {YUNET_URL} to vision/models/{YUNET_MODEL}")
         return FaceDetector(**kwargs)
     try:
         cls = DETECTORS[kind]

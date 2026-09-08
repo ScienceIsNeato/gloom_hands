@@ -183,13 +183,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"saved {path} ({frame.shape[1]}x{frame.shape[0]}); "
                       f"detector {kind}: {'hit' if d else 'no target'}")
             if key == ord("d"):
-                kind = kinds[(kinds.index(kind) + 1) % len(kinds)]
-                try:
-                    det = make_detector(kind, **scale_kw[kind])
-                except RuntimeError as e:
-                    print(f"cannot switch to {kind}: {e}")
-                    kind = kinds[(kinds.index(kind) + 1) % len(kinds)]
-                    det = make_detector(kind, **scale_kw[kind])
+                # yunet/haar are flavours of "face" for cycling purposes
+                slot = kinds.index(kind if kind in kinds else "face")
+                for step in range(1, len(kinds) + 1):
+                    kind = kinds[(slot + step) % len(kinds)]
+                    try:
+                        det = build(kind)  # keeps the tracker unless --raw
+                        break
+                    except RuntimeError as e:
+                        print(f"cannot switch to {kind}: {e}")
+                det.reset()
                 print(f"detector: {kind}")
         return 0
     finally:
