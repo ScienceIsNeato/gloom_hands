@@ -156,7 +156,19 @@ class Eyes:
         # across frames (coasting on their last motion when the detector
         # blinks) instead of being rediscovered from scratch every tick.
         self._det = make_tracked(detector, {"motion": {"roi": DETECT_ROI}}, coast_s=TRACK_COAST_S)
-        self._loc = Locator(CameraPose(**CAMERA), person_height_m=PERSON_HEIGHT_M)
+        pose = CameraPose(**CAMERA)
+        # If the camera looks back toward the pivot, nobody it can see is
+        # beyond the pivot; but a distance estimate that overshoots the
+        # camera-to-pivot gap would put them there and flip the bearing to
+        # the soft limit. Cap the range just short of the pivot.
+        to_pivot = (-pose.x_m, -pose.y_m)
+        axis = (math.cos(math.radians(pose.yaw_deg)), math.sin(math.radians(pose.yaw_deg)))
+        gap = math.hypot(*to_pivot)
+        facing_pivot = gap > 0.5 and (to_pivot[0] * axis[0] + to_pivot[1] * axis[1]) / gap > 0.5
+        max_range = 0.9 * gap if facing_pivot else 10.0
+        self._loc = Locator(pose, person_height_m=PERSON_HEIGHT_M, range_clamp_m=(0.4, max_range))
+        if facing_pivot:
+            print(f"eyes: camera faces the arm {gap:.1f} m away; distance capped at {max_range:.1f} m")
         self._smooth = Smoother(window=LOCK_SMOOTH)
         self._frame = None
         self._ended = False
