@@ -23,6 +23,9 @@ soft-limited per angles.LIMITS_DEG). Three layers of creep, tunable below:
               camera can sit anywhere: see CAMERA below). The base snaps to
               them and follows; when nobody has moved for LOST_AFTER_S the
               sweep resumes from wherever the base is.
+  5. STRIKE — while locked, every so often the arm draws back into a coil
+              (POSE_COIL_DEG), sits there still tracking you, then lurches
+              back out to the pointing pose with an overshoot.
 
 POSE_POINT_DEG is the "arm extended toward the viewer" posture. Every arm
 is assembled slightly differently — pre-flight it joint by joint with
@@ -55,6 +58,13 @@ POSE_POINT_DEG = {
     1: 12.0,   # gripper: half-open, ready to grab
 }
 POSE_REST_DEG = {sid: 0.0 for sid in range(1, 7)}
+# Drawn back like a snake about to strike: shoulder pulled back, elbow
+# folded, wrist curled. Same caveat as the point pose: tune on the arm.
+POSE_COIL_DEG = {
+    5: 6.0,     # shoulder: pulled back upright
+    4: -100.0,  # elbow: folded hard
+    3: 48.0,    # wrist bend: curled in
+}
 
 # ---- the hunt -------------------------------------------------------- #
 SWEEP_LO_DEG, SWEEP_HI_DEG = -53.0, 53.0  # base range of the search
@@ -71,6 +81,14 @@ FREEZE_CHANCE = 0.012   # per tick: freeze mid-sweep...
 FREEZE_S = (0.8, 2.2)   # ...for this long
 SNAP_CHANCE = 0.010     # per tick: sudden fast snap to a new heading
 SNAP_MS = 280           # how fast the snap lands (small ms = violent)
+
+# ---- the strike (only while locked on) ------------------------------- #
+COIL_EVERY_S = (6.0, 14.0)   # seconds of pointing at you before the next coil
+COIL_MS = 1800               # how slowly it draws back (menacing = slow)
+COIL_HOLD_S = (2.0, 5.0)     # how long it stays coiled, still tracking
+LURCH_MS = 320               # how fast it comes out at you (small = violent)
+LURCH_OVERSHOOT_DEG = 10.0   # shoulder past the point pose at the end of the lurch...
+SETTLE_MS = 450              # ...then settles back over this long
 
 # ---- the eyes (--eyes) ----------------------------------------------- #
 # Where the camera sits, measured from the BASE PIVOT, looking down from
@@ -121,10 +139,14 @@ class Backend:
 
 
 class DryBackend:
-    """No arm: print the base heading so the eyes can be tested anywhere."""
+    """No arm: print the base heading (and any elbow/shoulder move) so the
+    eyes and the strike can be tested anywhere."""
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
-        if 6 in moves_deg:
+        if 4 in moves_deg or 5 in moves_deg:
+            joints = " ".join(f"s{sid}={d:+.0f}" for sid, d in sorted(moves_deg.items()))
+            print(f"  pose -> {joints} over {dur_ms} ms")
+        elif 6 in moves_deg:
             print(f"  base -> {moves_deg[6]:+6.1f} deg over {dur_ms} ms")
 
 
@@ -267,6 +289,8 @@ def main() -> None:
     frozen_until = 0.0
     last_seen = -1e9      # when the eyes last saw someone
     locked = False
+    coil = "out"          # "out" (pointing) / "coiling" / "coiled" — the strike cycle
+    coil_at = 0.0         # when the next phase of the strike cycle happens
     try:
         while True:
             now = time.monotonic() - t0
@@ -287,6 +311,7 @@ def main() -> None:
                         )
                         locked = True
                         last_seen = now
+                        coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
                         arm.send({6: base}, SNAP_MS)
                         time.sleep(SNAP_MS / 1000 + 0.1)
                         continue
@@ -295,6 +320,9 @@ def main() -> None:
                     print("lost it... resuming the hunt")
                     locked = False
                     heading_offset = rephase(now, base)
+                    if coil != "out":
+                        arm.send({sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}, 1500)
+                        coil = "out"
 
             if now < frozen_until:
                 time.sleep(TICK)
@@ -310,14 +338,34 @@ def main() -> None:
                     arm.send({6: clamp_deg(6, base)}, SNAP_MS)  # violent re-aim
                     time.sleep(SNAP_MS / 1000 + 0.1)
                     continue
+            elif now >= coil_at:
+                # STRIKE cycle: out -> coiling (slow draw back) -> coiled (hold,
+                # still tracking) -> LURCH back out with overshoot -> out
+                if coil == "out":
+                    print("...drawing back")
+                    arm.send({**POSE_COIL_DEG, 6: clamp_deg(6, base)}, COIL_MS)
+                    coil, coil_at = "coiling", now + COIL_MS / 1000
+                elif coil == "coiling":
+                    coil, coil_at = "coiled", now + random.uniform(*COIL_HOLD_S)
+                else:
+                    print("LURCH")
+                    strike = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
+                    strike[5] = clamp_deg(5, strike[5] + LURCH_OVERSHOOT_DEG)
+                    arm.send({**strike, 6: clamp_deg(6, base)}, LURCH_MS)
+                    time.sleep(LURCH_MS / 1000)
+                    arm.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
+                    coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
+                    continue
 
             # WRITHE: independent slow oscillators so nothing ever repeats.
+            # While coiled the wrist stays curled and only quivers.
+            wrist_home, nod = (POSE_COIL_DEG[3], NOD_DEPTH * 0.3) if coil != "out" else (POSE_POINT_DEG[3], NOD_DEPTH)
             moves = {
                 6: clamp_deg(6, base),
                 1: clamp_deg(1, POSE_POINT_DEG[1] + GROPE_DEPTH * math.sin(1.9 * now + 1.0)
                              + 6.0 * math.sin(6.3 * now)),
                 2: clamp_deg(2, POSE_POINT_DEG[2] + ROLL_DEPTH * math.sin(0.7 * now)),
-                3: clamp_deg(3, POSE_POINT_DEG[3] + NOD_DEPTH * math.sin(1.3 * now + 2.1)),
+                3: clamp_deg(3, wrist_home + nod * math.sin(1.3 * now + 2.1)),
             }
             arm.send(moves, int(TICK * 1000) + 80)
             time.sleep(TICK)

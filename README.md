@@ -78,7 +78,11 @@ blinks. Press `d` in the window to cycle detectors, `s` to save a frame.
 
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep
-from wherever it is. Calibrate before the first hunt:
+from wherever it is. Every `COIL_EVERY_S` or so while locked it draws
+back into `POSE_COIL_DEG` (slowly), sits coiled for `COIL_HOLD_S` still
+tracking you, then lurches back out to the point pose in `LURCH_MS` with
+a shoulder overshoot. Tune the coil pose on the arm like the point pose,
+and start with a slower `LURCH_MS` if the arm rocks on its base. Calibrate before the first hunt:
 
 1. `./eyes.py --hfov 60` — check a known object sits at the right angle;
    adjust `--hfov`, add `--mirrored` if left and right are swapped, then
