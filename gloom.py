@@ -58,12 +58,15 @@ POSE_POINT_DEG = {
     1: 12.0,   # gripper: half-open, ready to grab
 }
 POSE_REST_DEG = {sid: 0.0 for sid in range(1, 7)}
-# Drawn back like a snake about to strike: shoulder pulled back, elbow
-# folded, wrist curled. Same caveat as the point pose: tune on the arm.
+# Drawn back like a snake about to strike: shoulder pulled back past
+# upright, forearm folded UP against it, hand kept aimed. Per the point
+# pose notes, NEGATIVE elbow bends the forearm down (that is how -48 gets
+# it level from a forward shoulder), so folding up means POSITIVE elbow.
+# Find the numbers on the arm:  ./pose.py 5=-12 4=80 3=12   then paste.
 POSE_COIL_DEG = {
-    5: 6.0,     # shoulder: pulled back upright
-    4: -100.0,  # elbow: folded hard
-    3: 48.0,    # wrist bend: curled in
+    5: -12.0,   # shoulder: leaned back
+    4: 80.0,    # elbow: forearm folded up toward the upper arm
+    3: 12.0,    # wrist bend: as in the point pose until the fold is right
 }
 
 # ---- the hunt -------------------------------------------------------- #
@@ -86,7 +89,8 @@ SNAP_MS = 280           # how fast the snap lands (small ms = violent)
 COIL_EVERY_S = (6.0, 14.0)   # seconds of pointing at you before the next coil
 COIL_MS = 1800               # how slowly it draws back (menacing = slow)
 COIL_HOLD_S = (2.0, 5.0)     # how long it stays coiled, still tracking
-LURCH_MS = 320               # how fast it comes out at you (small = violent)
+LURCH_MS = 500               # how fast it comes out at you (small = violent; below ~450 the
+                             # servos are flat out and the supply sag can drop the Bluetooth link)
 LURCH_OVERSHOOT_DEG = 10.0   # shoulder past the point pose at the end of the lurch...
 SETTLE_MS = 450              # ...then settles back over this long
 
@@ -134,8 +138,11 @@ class Backend:
             self._arm.setPosition(
                 [self._servo(sid, pos) for sid, pos in units.items()], dur_ms, wait=False
             )
-        else:
-            self._arm.set_position(list(units.items()), duration_ms=dur_ms)
+            return
+        try:
+            self._arm.set_position(list(units.items()), duration_ms=dur_ms)  # reconnects itself once
+        except Exception as err:  # noqa: BLE001 - keep hunting; the next tick retries
+            print(f"arm: move skipped ({err})")
 
 
 class DryBackend:
@@ -373,8 +380,11 @@ def main() -> None:
         pass
     finally:
         print("\nreleasing...")
-        arm.send(POSE_REST_DEG, 2500)
-        time.sleep(2.7)
+        try:
+            arm.send(POSE_REST_DEG, 2500)
+            time.sleep(2.7)
+        except Exception as err:  # noqa: BLE001
+            print(f"arm: could not send the rest pose ({err}); power-cycle it to relax")
         if eyes is not None:
             eyes.close()
 

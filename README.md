@@ -81,8 +81,11 @@ While locked the base follows the person and the writhe continues; after
 from wherever it is. Every `COIL_EVERY_S` or so while locked it draws
 back into `POSE_COIL_DEG` (slowly), sits coiled for `COIL_HOLD_S` still
 tracking you, then lurches back out to the point pose in `LURCH_MS` with
-a shoulder overshoot. Tune the coil pose on the arm like the point pose,
-and start with a slower `LURCH_MS` if the arm rocks on its base. Calibrate before the first hunt:
+a shoulder overshoot. Find the coil pose on the arm with
+`./pose.py 5=-12 4=80 3=12` (or `./pose.py coil 4=60` to tweak one joint)
+and paste the numbers into `POSE_COIL_DEG`. Keep `LURCH_MS` at 450 or
+above: faster than that the servos are flat out and the supply sag can
+drop the Bluetooth link (the hunt now reconnects and carries on if it does). Calibrate before the first hunt:
 
 1. `./eyes.py --hfov 60` — check a known object sits at the right angle;
    adjust `--hfov`, add `--mirrored` if left and right are swapped, then
@@ -116,6 +119,7 @@ and start with a slower `LURCH_MS` if the arm rocks on its base. Calibrate befor
 - `eyes.py` — preview and benchmark the tracking with gloom.py's camera settings
 - `vision/` — detectors, camera geometry, tracker (`detector.py`, `geometry.py`, `tracking.py`, `preview.py`)
 - `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
+- `pose.py` — move several joints at once and hold, for finding poses by eye
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless

@@ -50,6 +50,8 @@ class BleArm:
         self._thread.start()
         self._client: BleakClient | None = None
         self._char = None
+        self._name_hints = name_hints
+        self._timeout = timeout
         self._run(self._connect(name_hints, timeout))
 
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
@@ -76,7 +78,7 @@ class BleArm:
                 "phone app fully closed (it hogs the only connection)?"
             )
         ADDRESS_CACHE.write_text(device.address)
-        self._client = BleakClient(device)
+        self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
         await self._client.connect()
         # The vendor UART service: pick its writable characteristic.
         for service in self._client.services:
@@ -90,14 +92,47 @@ class BleArm:
             raise RuntimeError(f"no writable characteristic under {SERVICE_HINT}; services: {uuids}")
         print(f"connected: {device.name} ({device.address}), char {self._char.uuid}")
 
+    def _on_disconnect(self, _client: BleakClient) -> None:
+        # Fast multi-servo moves can brown out the controller's radio; the
+        # next write will notice and reconnect.
+        print("arm: Bluetooth link dropped")
+
+    @property
+    def connected(self) -> bool:
+        return self._client is not None and self._client.is_connected
+
+    def reconnect(self) -> None:
+        """Re-establish the link (the board keeps its address, so this is
+        usually a 1-2 s directed connect rather than a scan)."""
+        print("arm: reconnecting...")
+        try:
+            if self._client is not None:
+                self._run(self._client.disconnect())
+        except Exception:  # noqa: BLE001 - already gone; that's fine
+            pass
+        self._client = None
+        self._char = None
+        self._run(self._connect(self._name_hints, self._timeout))
+
+    def _write(self, packet: bytes) -> None:
+        try:
+            if not self.connected:
+                raise ConnectionError("not connected")
+            self._run(self._client.write_gatt_char(self._char, packet, response=False))
+        except Exception as first:  # noqa: BLE001 - bleak raises several types
+            self.reconnect()  # raises if the arm cannot be found
+            try:
+                self._run(self._client.write_gatt_char(self._char, packet, response=False))
+            except Exception as err:  # noqa: BLE001
+                raise ConnectionError(f"arm write failed after reconnect: {err}") from first
+
     def set_position(
         self, moves: int | list[tuple[int, int]], pos: int | None = None, duration_ms: int = 1500
     ) -> None:
         """set_position(3, 600) or set_position([(3, 600), (6, 400)]). Raw units."""
         if isinstance(moves, int):
             moves = [(moves, int(pos))]  # type: ignore[arg-type]
-        packet = servo_move_packet(moves, duration_ms)
-        self._run(self._client.write_gatt_char(self._char, packet, response=False))
+        self._write(servo_move_packet(moves, duration_ms))
 
     def set_angle(
         self,
@@ -117,5 +152,8 @@ class BleArm:
 
     def close(self) -> None:
         if self._client is not None:
-            self._run(self._client.disconnect())
+            try:
+                self._run(self._client.disconnect())
+            except Exception:  # noqa: BLE001 - closing anyway
+                pass
         self._loop.call_soon_threadsafe(self._loop.stop)
