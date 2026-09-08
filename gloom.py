@@ -7,6 +7,8 @@ searching when it finds one.
     ./gloom.py --usb           # wired
     ./gloom.py --eyes          # webcam: lock the base onto whoever moves
     ./gloom.py --eyes --dry    # no arm: print what it would send (test the eyes)
+    ./gloom.py --eyes --dry --show      # ...and open a window showing what it sees
+    ./gloom.py --eyes --detector person # HOG person detector instead of frame differencing
     ./gloom.py --eyes --video-src 1     # another camera, or a video file
 
 All values are CENTERED DEGREES (0.0 = servo midpoint, +/-120 span,
@@ -125,9 +127,12 @@ class Eyes:
     degrees for servo 6 (sign applied). A background thread keeps the
     newest frame so the hunt loop never reads a stale one."""
 
-    def __init__(self, video_src: str, detector: str) -> None:
+    def __init__(self, video_src: str, detector: str, show: bool = False) -> None:
         import cv2
         from halloween_tracker import CameraPose, Locator, Smoother, make_detector
+
+        self.kind = detector
+        self._show = show
 
         try:
             src: int | str = int(video_src)
@@ -167,23 +172,38 @@ class Eyes:
     def ended(self) -> bool:
         return self._ended
 
-    def look(self, first: bool) -> tuple[float, float] | None:
-        """(base degrees, range m) of the victim, or None if nobody moved."""
+    def look(self, first: bool) -> tuple[float, "object"] | None:
+        """(base degrees, Target) of the victim, or None if nobody was seen.
+        The Target carries the camera-relative distance and angle too."""
         with self._lock:
             frame, self._frame = self._frame, None
         if frame is None:
             return None
+        t0 = time.perf_counter()
         d = self._det.detect(frame)
-        if d is None:
+        t = self._loc.locate(d) if d is not None else None
+        if self._show:
+            self._draw(d, t, 1000 * (time.perf_counter() - t0))
+        if t is None:
             return None
-        t = self._loc.locate(d)
         deg = BASE_SIGN * t.bearing_deg
         if first:
             self._smooth.reset(deg)  # snap straight there, no lag from the old average
-        return self._smooth.push(deg), t.range_m
+        return self._smooth.push(deg), t
+
+    def _draw(self, d, t, ms: float) -> None:  # noqa: ANN001
+        from halloween_tracker.preview import draw
+
+        view = self._det.last_frame.copy()
+        draw(view, d, t, self._det.roi_y0, ms, self.kind)
+        self._cv2.imshow("gloom eyes", view)
+        if (self._cv2.waitKey(1) & 0xFF) == 27:
+            raise KeyboardInterrupt
 
     def close(self) -> None:
         self._cam.release()
+        if self._show:
+            self._cv2.destroyAllWindows()
 
 
 def sweep_deg(now: float, heading_offset: float) -> float:
@@ -207,16 +227,18 @@ def main() -> None:
     p.add_argument("--dry", action="store_true", help="no arm: print base headings")
     p.add_argument("--eyes", action="store_true", help="track people with the webcam")
     p.add_argument("--video-src", default=VIDEO_SRC, help="camera index or video file")
-    p.add_argument("--detector", default=DETECTOR, choices=("motion", "person"))
+    p.add_argument("--detector", default=DETECTOR, choices=("motion", "person"),
+                   help="frame differencing (cheap) or HOG person detection")
+    p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
     a = p.parse_args()
 
-    eyes = Eyes(a.video_src, a.detector) if a.eyes else None
+    eyes = Eyes(a.video_src, a.detector, show=a.show) if a.eyes else None
     arm = DryBackend() if a.dry else Backend(a.usb)
     print("assuming the pose...")
     base = (SWEEP_LO_DEG + SWEEP_HI_DEG) / 2
     arm.send({**POSE_POINT_DEG, 6: base}, 2500)
     time.sleep(2.7)
-    print("hunting" + (" with eyes open" if eyes else "") + ". Ctrl-C to release the victim.")
+    print("hunting" + (f" with eyes open ({eyes.kind})" if eyes else "") + ". Ctrl-C to release the victim.")
 
     t0 = time.monotonic()
     heading_offset = 0.0  # phase shift accumulated by snaps
@@ -234,10 +256,13 @@ def main() -> None:
                     break
                 seen = eyes.look(first=not locked)
                 if seen is not None:
-                    base, rng = seen
+                    base, t = seen
                     base = clamp_deg(6, base)
                     if not locked:
-                        print(f"victim spotted: base {base:+.1f} deg, ~{rng:.1f} m — snapping")
+                        print(
+                            f"victim spotted: camera sees {t.cam_range_m:.1f} m at "
+                            f"{t.cam_bearing_deg:+.1f} deg -> base {base:+.1f} deg — snapping"
+                        )
                         locked = True
                         arm.send({6: base}, SNAP_MS)
                         time.sleep(SNAP_MS / 1000 + 0.1)
