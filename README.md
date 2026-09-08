@@ -62,22 +62,26 @@ the top of `gloom.py` (metres forward and left of the pivot, and which
 way the lens points), plus its horizontal field of view.
 
 ```bash
+./eyes.py                          # just look: preview window, no arm (d switches detector)
+./eyes.py --detector person        # HOG person detector instead of frame differencing
 ./gloom.py --eyes                  # hunt, and lock on when someone moves
-./gloom.py --eyes --dry            # no arm: print the base headings it would send
+./gloom.py --eyes --dry --show     # no arm: print the base headings, show what it sees
 ./gloom.py --eyes --video-src 1    # a different camera, or a video file
 ```
+
+Everything runs from this folder; the tracker package is installed into
+`.venv`, and `eyes.py` feeds it the same `CAMERA` settings `gloom.py` uses.
 
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep
 from wherever it is. Calibrate before the first hunt:
 
-1. `python -m halloween_tracker.preview --hfov 60` — check a known object
-   sits at the right angle; adjust `--hfov`, add `--mirrored` if left and
-   right are swapped, then copy the values into `CAMERA`.
+1. `./eyes.py --hfov 60` — check a known object sits at the right angle;
+   adjust `--hfov`, add `--mirrored` if left and right are swapped, then
+   copy the values into `CAMERA`.
 2. Set `BASE_SIGN` in `gloom.py`: +1 if positive servo-6 degrees turn the
    base left, -1 if right. `./move_ble.py 6 30` tells you.
-3. `python -m halloween_tracker.preview --bench 60` on the computer that
-   will run it. The default detector is frame differencing, which costs a
+3. `./eyes.py --bench 60` on the computer that will run it. The default detector is frame differencing, which costs a
    few milliseconds. The HOG person detector (`--detector person`) sees
    people who stand still but is much heavier on a small board.
 
@@ -101,6 +105,7 @@ from wherever it is. Calibrate before the first hunt:
 ## Files
 
 - `gloom.py` — the hunt; `--eyes` adds webcam tracking, `--dry` runs it without an arm
+- `eyes.py` — preview and benchmark the tracking with gloom.py's camera settings
 - `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
