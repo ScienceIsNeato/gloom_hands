@@ -58,16 +58,10 @@ POSE_POINT_DEG = {
     1: 12.0,   # gripper: half-open, ready to grab
 }
 POSE_REST_DEG = {sid: 0.0 for sid in range(1, 7)}
-# Drawn back like a snake about to strike: shoulder pulled back past
-# upright, forearm folded UP against it, hand kept aimed. Per the point
-# pose notes, NEGATIVE elbow bends the forearm down (that is how -48 gets
-# it level from a forward shoulder), so folding up means POSITIVE elbow.
-# Find the numbers on the arm:  ./pose.py 5=-12 4=80 3=12   then paste.
-POSE_COIL_DEG = {
-    5: -12.0,   # shoulder: leaned back
-    4: 80.0,    # elbow: forearm folded up toward the upper arm
-    3: 12.0,    # wrist bend: as in the point pose until the fold is right
-}
+# Drawn back like a snake about to strike: shoulder leaned well back,
+# elbow folded hard, wrist curled. Dialed in on the arm with ./pose.py
+# (which prints this line); re-run it if the arm is reassembled.
+POSE_COIL_DEG = {5: -57.0, 4: -100.0, 3: 37.0}
 
 # ---- the hunt -------------------------------------------------------- #
 SWEEP_LO_DEG, SWEEP_HI_DEG = -53.0, 53.0  # base range of the search
