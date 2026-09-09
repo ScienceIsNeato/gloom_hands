@@ -57,25 +57,33 @@ class BleArm:
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
-    async def _connect(self, name_hints: tuple[str, ...], timeout: float) -> None:
+    async def _connect(self, name_hints: tuple[str, ...], timeout: float, attempts: int = 3) -> None:
         device = None
-        # Fast path: directed lookup of the cached address (returns the
-        # moment the arm advertises; stale cache falls through to a scan).
-        if ADDRESS_CACHE.exists():
-            addr = ADDRESS_CACHE.read_text().strip()
-            if addr:
-                device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
-        if device is None:
-            # Filtered scan: stops as soon as a matching name appears
-            # instead of sweeping for the full timeout.
-            device = await BleakScanner.find_device_by_filter(
-                lambda d, ad: bool(d.name and any(h in d.name.lower() for h in name_hints)),
-                timeout=timeout,
-            )
+        for attempt in range(1, attempts + 1):
+            # Fast path: directed lookup of the cached address (returns the
+            # moment the arm advertises; stale cache falls through to a scan).
+            if ADDRESS_CACHE.exists():
+                addr = ADDRESS_CACHE.read_text().strip()
+                if addr:
+                    device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
+            if device is None:
+                # Filtered scan: stops as soon as a matching name appears
+                # instead of sweeping for the full timeout.
+                device = await BleakScanner.find_device_by_filter(
+                    lambda d, ad: bool(d.name and any(h in d.name.lower() for h in name_hints)),
+                    timeout=timeout,
+                )
+            if device is not None:
+                break
+            if attempt < attempts:
+                # The board re-advertises a few seconds after a link drops.
+                print(f"arm not advertising yet (attempt {attempt}/{attempts}); retrying...")
+                await asyncio.sleep(2.0)
         if device is None:
             raise RuntimeError(
                 f"no BLE device named like {name_hints} found — arm powered on? "
-                "phone app fully closed (it hogs the only connection)?"
+                "phone app fully closed (it hogs the only connection)? another "
+                "script still running (pgrep -fl 'gloom.py|pose.py|teleop.py')?"
             )
         ADDRESS_CACHE.write_text(device.address)
         self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
