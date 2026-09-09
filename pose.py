@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Move several joints at once and hold, for finding poses by eye:
+"""Dial in a pose one joint at a time. Each key nudges ONE joint by STEP
+degrees in a quick move; after every change the pose is printed as a line
+you can paste straight into gloom.py.
 
-    ./pose.py 5=-12 4=80 3=12          # servo=degrees pairs, any joints
-    ./pose.py point                    # gloom.py's POSE_POINT_DEG
-    ./pose.py coil                     # gloom.py's POSE_COIL_DEG
-    ./pose.py coil 4=60                # a named pose with overrides
-    ./pose.py rest                     # everything to 0
-    ./pose.py --usb ... / --ms 1200 ...
+    ./pose.py            # start from POSE_COIL_DEG
+    ./pose.py point      # start from POSE_POINT_DEG
+    ./pose.py --usb      # wired
 
-Angles are centered degrees, soft-limited per angles.LIMITS_DEG. Iterate
-until it looks right, then paste the numbers into gloom.py.
+      1 / 2   shoulder (servo 5)  - / +
+      4 / 5   elbow    (servo 4)  - / +
+      7 / 8   wrist    (servo 3)  - / +
+      - / =   step size down / up      q   quit (arm stays where it is)
+
 Servo map: 1 gripper · 2 wrist roll · 3 wrist bend · 4 elbow · 5 shoulder · 6 base
 """
 # Re-exec into the project venv (if present) so ./script.py works without
@@ -20,38 +22,65 @@ _venv_py = _os.path.join(_venv_dir, "bin", "python")
 if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspath(_venv_dir):
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import sys
-import time
+import termios
+import tty
 
 from angles import NAMES, clamp_deg
 
+STEP_DEG = 5.0   # per keypress; - / = adjust
+MOVE_MS = 250    # quick nudge
+
+KEYS = {"1": (5, -1), "2": (5, +1), "4": (4, -1), "5": (4, +1), "7": (3, -1), "8": (3, +1)}
+
 args = sys.argv[1:]
 usb = "--usb" in args
-ms = 1500
-if "--ms" in args:
-    i = args.index("--ms")
-    ms = int(args[i + 1])
-    del args[i:i + 2]
-args = [a for a in args if a != "--usb"]
-if not args:
-    raise SystemExit(__doc__)
+dry = "--dry" in args
+start = "point" if "point" in args else "coil"
 
-from gloom import POSE_COIL_DEG, POSE_POINT_DEG, POSE_REST_DEG, Backend  # noqa: E402
+from gloom import POSE_COIL_DEG, POSE_POINT_DEG, Backend, DryBackend  # noqa: E402
 
-NAMED = {"point": POSE_POINT_DEG, "coil": POSE_COIL_DEG, "rest": POSE_REST_DEG}
-moves: dict[int, float] = {}
-for a in args:
-    if a in NAMED:
-        moves.update(NAMED[a])
-    elif "=" in a:
-        sid, deg = a.split("=", 1)
-        moves[int(sid)] = float(deg)
-    else:
-        raise SystemExit(f"unrecognized {a!r}\n{__doc__}")
-moves = {sid: clamp_deg(sid, d) for sid, d in moves.items()}
+pose = dict(POSE_POINT_DEG if start == "point" else POSE_COIL_DEG)
+for sid in (5, 4, 3):
+    pose.setdefault(sid, 0.0)
 
-arm = Backend(usb)
-arm.send(moves, ms)
-for sid, d in sorted(moves.items()):
-    print(f"  servo {sid} {NAMES[sid]:10s} -> {d:+6.1f} deg")
-time.sleep(ms / 1000 + 0.3)
-print("holding. Paste the numbers you like into gloom.py.")
+
+def show(step: float) -> None:
+    line = ", ".join(f"{sid}: {pose[sid]:.1f}" for sid in (5, 4, 3))
+    print(f"POSE_COIL_DEG = {{{line}}}    (step {step:g} deg)")
+
+
+def getch() -> str:
+    if not sys.stdin.isatty():  # piped keys (tests): one char per line
+        line = sys.stdin.readline()
+        return line.strip()[:1] if line else "q"
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+arm = DryBackend() if dry else Backend(usb)
+print(f"moving to the {start} pose...")
+arm.send({sid: pose[sid] for sid in (5, 4, 3)}, 1500)
+print("1/2 shoulder  4/5 elbow  7/8 wrist  -/= step  q quit")
+step = STEP_DEG
+show(step)
+while True:
+    ch = getch()
+    if ch == "q":
+        break
+    if ch == "-":
+        step = max(1.0, step / 2)
+        show(step)
+    elif ch == "=":
+        step = min(20.0, step * 2)
+        show(step)
+    elif ch in KEYS:
+        sid, sign = KEYS[ch]
+        pose[sid] = clamp_deg(sid, pose[sid] + sign * step)
+        arm.send({sid: pose[sid]}, MOVE_MS)  # this joint only
+        show(step)
+print("done — paste the last POSE_COIL_DEG line into gloom.py")
