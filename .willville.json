@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The robot arm obeys the laptop now, wired or wireless, and has its first personality: a Zelda gloom hand that sweeps around looking for victims",
-    "direction": "Tune the hunting pose on the real hardware, then give it eyes — a webcam so it locks onto people it finds",
-    "last_update": "2026-09-05T07:18:51Z"
+    "status": "Eyes are working on the real arm — it spots you, swings over, and now coils back and lurches out at you. Just made the whole thing run on Windows for the upcoming deployment.",
+    "direction": "Deploy to the Windows machine and shake out anything the Mac was hiding, then mount the gloom hand statue that just shipped",
+    "last_update": "2026-09-10T00:00:00Z"
   }
 }

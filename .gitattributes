@@ -1,0 +1,7 @@
+# Normalise line endings so a Windows checkout does not rewrite the repo.
+* text=auto
+
+# Binary assets: never touch these.
+*.onnx binary
+*.avi  binary
+*.png  binary
