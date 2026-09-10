@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The gloom hand has eyes and they work: a webcam 15 feet in front of the arm spots your face, the arm swings to you and follows, then goes back to hunting when you leave. PR up.",
-    "direction": "Settle which way is left on the arm, then try it on the little computer it will live on and see if face detection is affordable there",
-    "last_update": "2026-09-08T02:20:00Z"
+    "status": "Eyes are working on the real arm — it spots you, swings over, and now coils back and lurches out at you. Just made the whole thing run on Windows for the upcoming deployment.",
+    "direction": "Deploy to the Windows machine and shake out anything the Mac was hiding, then mount the gloom hand statue that just shipped",
+    "last_update": "2026-09-10T00:00:00Z"
   }
 }

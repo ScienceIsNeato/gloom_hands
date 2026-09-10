@@ -17,6 +17,7 @@ it exactly like the USB controller.
 from __future__ import annotations
 
 import asyncio
+import sys as _sys
 import threading
 from pathlib import Path
 
@@ -27,6 +28,21 @@ CMD_SERVO_MOVE = 0x03
 # The arm's address is cached after the first find so later runs connect
 # in ~1-2s instead of sitting through a full discovery sweep.
 ADDRESS_CACHE = Path(__file__).with_name(".xarm_ble_address")
+
+
+def _cached_address() -> str | None:
+    """The arm's address from a previous run on THIS platform, if any.
+
+    macOS reports a CoreBluetooth UUID that is meaningless anywhere else,
+    Windows and Linux report a MAC; a cache written on one is useless on
+    the other, so the file records which platform wrote it.
+    """
+    if not ADDRESS_CACHE.exists():
+        return None
+    lines = [ln.strip() for ln in ADDRESS_CACHE.read_text().splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        return lines[1] if lines[0] == _sys.platform else None
+    return lines[0] if lines else None  # pre-tag cache from an older version
 
 
 def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
@@ -62,10 +78,9 @@ class BleArm:
         for attempt in range(1, attempts + 1):
             # Fast path: directed lookup of the cached address (returns the
             # moment the arm advertises; stale cache falls through to a scan).
-            if ADDRESS_CACHE.exists():
-                addr = ADDRESS_CACHE.read_text().strip()
-                if addr:
-                    device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
+            addr = _cached_address()
+            if addr:
+                device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
             if device is None:
                 # Filtered scan: stops as soon as a matching name appears
                 # instead of sweeping for the full timeout.
@@ -85,7 +100,7 @@ class BleArm:
                 "phone app fully closed (it hogs the only connection)? another "
                 "script still running (pgrep -fl 'gloom.py|pose.py|teleop.py')?"
             )
-        ADDRESS_CACHE.write_text(device.address)
+        ADDRESS_CACHE.write_text(f"{_sys.platform}\n{device.address}\n")
         self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
         await self._client.connect()
         # The vendor UART service: pick its writable characteristic.

@@ -38,8 +38,13 @@ Servo map: 1 gripper · 2 wrist roll · 3 wrist bend · 4 elbow · 5 shoulder ·
 # activation — and without hardcoding any machine-specific path.
 import os as _os, sys as _sys
 _venv_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".venv")
-_venv_py = _os.path.join(_venv_dir, "bin", "python")
+_venv_py = _os.path.join(_venv_dir, *(("Scripts", "python.exe") if _os.name == "nt" else ("bin", "python")))
 if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspath(_venv_dir):
+    if _os.name == "nt":
+        # execv on Windows detaches from the console (the prompt returns while
+        # output keeps coming), so spawn and pass the exit code through.
+        import subprocess as _sp
+        _sys.exit(_sp.call([_venv_py] + _sys.argv))
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import argparse
 import math
@@ -161,20 +166,14 @@ class Eyes:
     def __init__(self, video_src: str, detector: str, show: bool = False) -> None:
         import cv2
         from vision import CameraPose, Locator, Smoother, make_tracked
+        from vision.capture import as_source, open_capture
 
         self.kind = detector
         self._show = show
 
-        try:
-            src: int | str = int(video_src)
-        except ValueError:
-            src = video_src
+        src = as_source(video_src)
         self._cv2 = cv2
-        self._cam = cv2.VideoCapture(src)
-        if not self._cam.isOpened():
-            raise SystemExit(f"could not open camera {video_src!r}")
-        self._cam.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_SIZE[0])
-        self._cam.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_SIZE[1])
+        self._cam = open_capture(src, *CAPTURE_SIZE)
         # Tracker on top of the detector: a person, once found, is followed
         # across frames (coasting on their last motion when the detector
         # blinks) instead of being rediscovered from scratch every tick.

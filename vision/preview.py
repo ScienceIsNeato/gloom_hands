@@ -28,23 +28,14 @@ import time
 
 import cv2
 
+from .capture import open_capture
 from .detector import DETECTORS, Detection, make_detector
 from .geometry import CameraPose, Locator, Target
 from .tracking import make_tracked
 
 
 def open_camera(src: str, width: int, height: int) -> cv2.VideoCapture:
-    try:
-        source: int | str = int(src)
-    except ValueError:
-        source = src
-    cam = cv2.VideoCapture(source)
-    if not cam.isOpened():
-        raise SystemExit(f"could not open video source {src!r}")
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    return cam
+    return open_capture(src, width, height)
 
 
 def read(cam: cv2.VideoCapture, upside_down: bool):  # noqa: ANN201

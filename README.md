@@ -20,9 +20,10 @@ underneath (LOBOT packets: `0x55 0x55 <len> <cmd> <params>`):
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install xarm hidapi pyserial bleak
-.venv/bin/pip install numpy 'opencv-python<5'    # the eyes (4.x: the 5.0 wheels dropped the face detectors)
+.venv/bin/pip install -r requirements.txt
 ```
+
+On Windows, see [Running on Windows](#running-on-windows) below.
 
 ## Getting started — wired first
 
@@ -125,8 +126,56 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `teleop.py` — curses keyboard driving; `--ble` for wireless
 - `ble_arm.py` — the BLE transport (scan → connect → LOBOT packets)
 
+## Running on Windows
+
+Everything works, with three differences. Nothing in `requirements.txt`
+compiles from source: every dependency ships a Python 3.14 Windows wheel.
+
+**Setup**
+
+```bat
+py -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+**Invocation.** `./gloom.py` is a Unix idiom. On Windows run scripts
+through Python, from any interpreter — they re-exec themselves into
+`.venv\Scripts\python.exe` when that venv exists, so activating is
+optional:
+
+```bat
+py gloom.py --eyes --show
+py eyes.py --detector face
+py pose.py
+```
+
+**Bluetooth.** Bleak talks to the WinRT stack and needs Windows 10 build
+16299 or newer with a Bluetooth 4.0+ radio. Pair the arm in Windows
+Bluetooth settings first if a bare connect fails. The board still accepts
+exactly one connection, so close the phone app and any other script
+(`Get-Process python`) before running.
+
+**Camera.** OpenCV defaults to Media Foundation on Windows, which is slow
+to open a webcam and often ignores resolution requests, so the eyes ask
+for DirectShow first and fall back automatically. Windows also gates the
+camera per app: Settings → Privacy & security → Camera → *Let desktop apps
+access your camera*.
+
+**Two files are per-machine** and are not in git: `.xarm_ble_address` (the
+arm's address, which is a MAC on Windows and a different UUID on macOS, so
+it is tagged with the platform that wrote it and ignored elsewhere) and
+`vision/models/*.onnx` (the YuNet face model — re-download it, see
+`vision/models/README.md`).
+
 ## Note for cloners
 
-Scripts re-exec themselves into `./.venv/bin/python` when that venv
-exists, so `./script.py` works without activation. After cloning, create
-it once: `python3 -m venv .venv && .venv/bin/pip install xarm hidapi pyserial bleak numpy 'opencv-python<5'`.
+Scripts re-exec themselves into the project venv when one exists, so
+`./script.py` (macOS/Linux) or `py script.py` (Windows) works without
+activating anything. After cloning, create it once:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+Then fetch the YuNet face model into `vision/models/` (see the note there)
+if you want `--detector face`.

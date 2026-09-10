@@ -18,12 +18,21 @@ Servo map: 1 gripper · 2 wrist roll · 3 wrist bend · 4 elbow · 5 shoulder ·
 # activation — and without hardcoding any machine-specific path.
 import os as _os, sys as _sys
 _venv_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".venv")
-_venv_py = _os.path.join(_venv_dir, "bin", "python")
+_venv_py = _os.path.join(_venv_dir, *(("Scripts", "python.exe") if _os.name == "nt" else ("bin", "python")))
 if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspath(_venv_dir):
+    if _os.name == "nt":
+        # execv on Windows detaches from the console (the prompt returns while
+        # output keeps coming), so spawn and pass the exit code through.
+        import subprocess as _sp
+        _sys.exit(_sp.call([_venv_py] + _sys.argv))
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import sys
-import termios
-import tty
+
+if sys.platform == "win32":  # POSIX terminal control does not exist there
+    import msvcrt
+else:
+    import termios
+    import tty
 
 from angles import NAMES, clamp_deg
 
@@ -50,9 +59,17 @@ def show(step: float) -> None:
 
 
 def getch() -> str:
+    """One keypress, no Enter. Falls back to line-at-a-time when stdin is
+    piped (tests), and uses msvcrt on Windows where termios does not exist."""
     if not sys.stdin.isatty():  # piped keys (tests): one char per line
         line = sys.stdin.readline()
         return line.strip()[:1] if line else "q"
+    if sys.platform == "win32":
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):  # arrow/function key: swallow the second byte
+            msvcrt.getwch()
+            return ""
+        return ch
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:

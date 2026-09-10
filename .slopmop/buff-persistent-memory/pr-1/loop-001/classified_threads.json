@@ -1,0 +1,56 @@
+[
+  {
+    "thread_id": "PRRT_kwDOUPBtK86gIh3H",
+    "is_outdated": true,
+    "body": "Pressing 'd' rebuilds the detector with make_detector(), which drops tracking in the non-raw preview path; it can also crash when starting from a detector not in the cycle list (e.g. --detector yunet/haar) because kinds.index(kind) raises ValueError. Reuse the existing build() helper when switching, and treat non-cycled detectors as 'face' for cycling so the key handler is robust.",
+    "author": "copilot-pull-request-reviewer",
+    "path": "vision/preview.py",
+    "line": 196,
+    "created_at": "2026-09-08T07:15:49Z",
+    "category": "\ud83d\udc1b Logic/Correctness",
+    "blast_radius_score": 90,
+    "dependency_impact_score": 95,
+    "impact_score": 95,
+    "signals": [
+      "thread_marked_outdated"
+    ],
+    "anti_pattern_flags": [],
+    "resolution_priority_rank": 1
+  },
+  {
+    "thread_id": "PRRT_kwDOUPBtK86gIh33",
+    "is_outdated": true,
+    "body": "The Haar fallback warning prints the literal text 'YUNET_URL' instead of the actual URL, which makes the message less actionable. Interpolate the constant so users can follow the link directly.",
+    "author": "copilot-pull-request-reviewer",
+    "path": "vision/detector.py",
+    "line": null,
+    "created_at": "2026-09-08T07:15:50Z",
+    "category": "\ud83d\udcad General",
+    "blast_radius_score": 45,
+    "dependency_impact_score": 45,
+    "impact_score": 45,
+    "signals": [
+      "thread_marked_outdated"
+    ],
+    "anti_pattern_flags": [],
+    "resolution_priority_rank": 2
+  },
+  {
+    "thread_id": "PRRT_kwDOUPBtK86gIh3g",
+    "is_outdated": true,
+    "body": "The comments/README describe 'background' as the default detector, but DETECTOR is currently set to \"face\" (and eyes.py inherits that default via gloom.DETECTOR). Either update the docs to say face is the default, or change the default here to \"background\" to match the documented behavior.",
+    "author": "copilot-pull-request-reviewer",
+    "path": "gloom.py",
+    "line": null,
+    "created_at": "2026-09-08T07:15:50Z",
+    "category": "\ud83d\udcda Documentation",
+    "blast_radius_score": 35,
+    "dependency_impact_score": 25,
+    "impact_score": 35,
+    "signals": [
+      "thread_marked_outdated"
+    ],
+    "anti_pattern_flags": [],
+    "resolution_priority_rank": 3
+  }
+]
