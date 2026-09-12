@@ -264,6 +264,23 @@ class Eyes:
             self._cv2.destroyAllWindows()
 
 
+def writhe_deg(now: float, base: float, coiled: bool = False) -> dict[int, float]:
+    """WRITHE: independent slow oscillators so nothing ever repeats — the
+    gripper gropes, the wrist rolls and nods, the base holds its heading.
+    While coiled the wrist stays curled and only quivers.
+
+    Shared with servo_watch.py so the diagnostic soaks the servos with
+    exactly the motion the hunt uses, not an approximation of it."""
+    wrist_home, nod = (POSE_COIL_DEG[3], NOD_DEPTH * 0.3) if coiled else (POSE_POINT_DEG[3], NOD_DEPTH)
+    return {
+        6: clamp_deg(6, base),
+        1: clamp_deg(1, POSE_POINT_DEG[1] + GROPE_DEPTH * math.sin(1.9 * now + 1.0)
+                     + 6.0 * math.sin(6.3 * now)),
+        2: clamp_deg(2, POSE_POINT_DEG[2] + ROLL_DEPTH * math.sin(0.7 * now)),
+        3: clamp_deg(3, wrist_home + nod * math.sin(1.3 * now + 2.1)),
+    }
+
+
 def sweep_deg(now: float, heading_offset: float) -> float:
     """HUNT: uneven sinusoid — jittered phase makes the pace lurch."""
     phase = 2 * math.pi * (now / SWEEP_PERIOD) + heading_offset
@@ -372,16 +389,7 @@ def main() -> None:
                     continue
 
             # WRITHE: independent slow oscillators so nothing ever repeats.
-            # While coiled the wrist stays curled and only quivers.
-            wrist_home, nod = (POSE_COIL_DEG[3], NOD_DEPTH * 0.3) if coil != "out" else (POSE_POINT_DEG[3], NOD_DEPTH)
-            moves = {
-                6: clamp_deg(6, base),
-                1: clamp_deg(1, POSE_POINT_DEG[1] + GROPE_DEPTH * math.sin(1.9 * now + 1.0)
-                             + 6.0 * math.sin(6.3 * now)),
-                2: clamp_deg(2, POSE_POINT_DEG[2] + ROLL_DEPTH * math.sin(0.7 * now)),
-                3: clamp_deg(3, wrist_home + nod * math.sin(1.3 * now + 2.1)),
-            }
-            arm.send(moves, int(TICK * 1000) + 80)
+            arm.send(writhe_deg(now, base, coiled=coil != "out"), int(TICK * 1000) + 80)
             time.sleep(TICK)
     except KeyboardInterrupt:
         pass

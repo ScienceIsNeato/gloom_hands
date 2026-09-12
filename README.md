@@ -77,6 +77,17 @@ differs is the person; cheapest option that keeps a still person),
 follows the person across frames and holds position when the detector
 blinks. Press `d` in the window to cycle detectors, `s` to save a frame.
 
+**How far the base actually swings depends on where the person is, not
+just which way.** Someone standing next to the camera but far from the arm
+barely moves in the arm's frame, so the base twitches a few degrees;
+someone out near the arm swings it through tens of degrees. With the
+camera 4.6 m in front of the arm, a person 0.9 m from the lens crossing
+the entire field of view moves the base about 12 degrees, while a person
+3.5 m from the lens moves it through about 93. That is correct, not a
+bug, but it means desk testing looks dead. To watch the tracking work up
+close, temporarily set `x_m=0.0, yaw_deg=0.0` in `CAMERA`, which makes the
+arm mirror the camera one-for-one.
+
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep
 from wherever it is. Every `COIL_EVERY_S` or so while locked it draws
@@ -131,6 +142,7 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
 - `pose.py` — move several joints at once and hold, for finding poses by eye
 - `servo_watch.py` — wired load diagnostic: which joint is straining, and `--relax` to limp the arm
+- `test_geometry.py` — hand-computed checks for the camera-offset trig; no hardware needed
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless
