@@ -25,6 +25,7 @@ from bleak import BleakClient, BleakScanner
 
 SERVICE_HINT = "ffe0"
 CMD_SERVO_MOVE = 0x03
+CMD_SERVO_STOP = 0x14  # "unload": cut the motors so the joints go limp
 # The arm's address is cached after the first find so later runs connect
 # in ~1-2s instead of sitting through a full discovery sweep.
 ADDRESS_CACHE = Path(__file__).with_name(".xarm_ble_address")
@@ -51,6 +52,11 @@ def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
         pos = max(0, min(1000, int(pos)))
         params += [sid, pos & 0xFF, (pos >> 8) & 0xFF]
     return bytes([0x55, 0x55, len(params) + 2, CMD_SERVO_MOVE] + params)
+
+
+def servo_unload_packet(servo_ids: list[int]) -> bytes:
+    params = [len(servo_ids)] + list(servo_ids)
+    return bytes([0x55, 0x55, len(params) + 2, CMD_SERVO_STOP] + params)
 
 
 class BleArm:
@@ -172,6 +178,15 @@ class BleArm:
         if isinstance(moves, int):
             moves = [(moves, float(deg))]  # type: ignore[arg-type]
         self.set_position([(sid, servo_units(sid, d)) for sid, d in moves], duration_ms=duration_ms)
+
+    def unload(self, servo_ids: list[int] | None = None) -> None:
+        """Cut the motors so the joints go limp.
+
+        A servo commanded to hold a cantilevered pose keeps drawing current
+        forever and eventually sings its overload alarm; parking the arm is
+        not the same as relaxing it. Call this when you are done with it.
+        """
+        self._write(servo_unload_packet(servo_ids or [1, 2, 3, 4, 5, 6]))
 
     def close(self) -> None:
         if self._client is not None:

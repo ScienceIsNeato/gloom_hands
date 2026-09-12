@@ -143,10 +143,24 @@ class Backend:
         except Exception as err:  # noqa: BLE001 - keep hunting; the next tick retries
             print(f"arm: move skipped ({err})")
 
+    def relax(self) -> None:
+        """Cut the motors. Parking at rest still leaves every servo holding;
+        a cantilevered joint will draw current until it sings."""
+        try:
+            if self._servo is not None:
+                self._arm.servoOff()
+            else:
+                self._arm.unload()
+        except Exception as err:  # noqa: BLE001 - we are shutting down anyway
+            print(f"arm: could not unload ({err})")
+
 
 class DryBackend:
     """No arm: print the base heading (and any elbow/shoulder move) so the
     eyes and the strike can be tested anywhere."""
+
+    def relax(self) -> None:
+        print("  (relax)")
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
         if 4 in moves_deg or 5 in moves_deg:
@@ -376,8 +390,9 @@ def main() -> None:
         try:
             arm.send(POSE_REST_DEG, 2500)
             time.sleep(2.7)
+            arm.relax()  # rest is a POSE, not a rest: unload or it holds all night
         except Exception as err:  # noqa: BLE001
-            print(f"arm: could not send the rest pose ({err}); power-cycle it to relax")
+            print(f"arm: could not park it ({err}); power-cycle it to relax")
         if eyes is not None:
             eyes.close()
 

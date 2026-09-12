@@ -107,6 +107,15 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 
 ## Safety notes
 
+- **If a servo starts emitting a tone, it is the overload alarm.** Something
+  is stalled or overheating. `./servo_watch.py --relax` cuts the motors and
+  the arm goes limp, which is gentler than pulling the power. The wired
+  diagnostic (`./servo_watch.py --strike`) reproduces the coil-and-lurch and
+  ranks the joints by how far each one drifts off its commanded angle; the
+  worst offender is the one doing the work. It aborts and unloads on its own
+  if a joint drifts too far.
+- A pose is not a rest. Parking at `POSE_REST_DEG` still leaves every servo
+  energised and holding, so the hunt now unloads the arm when it exits.
 - Always give a duration (`move.py` defaults to 1500 ms). A big jump with
   no duration is a full-speed lunge.
 - Soft limits in `teleop.py` stay 50 units off the hard stops; widen them
@@ -121,6 +130,7 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `vision/` — detectors, camera geometry, tracker (`detector.py`, `geometry.py`, `tracking.py`, `preview.py`)
 - `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
 - `pose.py` — move several joints at once and hold, for finding poses by eye
+- `servo_watch.py` — wired load diagnostic: which joint is straining, and `--relax` to limp the arm
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless

@@ -48,11 +48,13 @@ def open_capture(src: str | int, width: int | None = None, height: int | None = 
         cam = None
 
     if cam is None:
-        tried = ", ".join(n for n, _ in attempts if n) or "the default backend"
-        raise SystemExit(
-            f"could not open video source {src!r} (tried {tried}) — camera plugged in, "
-            "not in use by another app, and this program allowed to use it?"
-        )
+        if isinstance(source, int):
+            tried = ", ".join(n for n, _ in attempts if n) or "the default backend"
+            raise SystemExit(
+                f"could not open camera {src!r} (tried {tried}) — plugged in, not already "
+                "in use by another app, and this program allowed to use it?"
+            )
+        raise SystemExit(f"could not open video file {src!r} — does it exist, and can OpenCV read it?")
 
     if width:
         cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
