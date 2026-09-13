@@ -74,9 +74,20 @@ SWEEP_PERIOD = 14.0                       # seconds per full left-right-left pas
 TICK = 0.22                               # seconds between command packets
 
 # ---- the writhe (degrees of travel around the pose) ------------------ #
-GROPE_DEPTH = 22.0   # gripper flex
-ROLL_DEPTH = 14.0    # wrist roll writhe
-NOD_DEPTH = 11.0     # wrist bend searching nods
+# Each oscillator is a depth in degrees and a rate in radians/second. Two
+# budgets constrain the rates, and both bite well below where you would
+# expect:
+#   RENDER  we only send a packet every TICK, so a component needs roughly
+#           eight packets per cycle to read as motion rather than stepping.
+#           At the current TICK that ceiling is about 0.57 Hz (3.6 rad/s).
+#   CURRENT a servo's draw follows how fast it is being asked to move, and
+#           depth * rate is that demand. The gripper used to spend half its
+#           budget on a tremor worth a fifth of its travel.
+# test_motion.py checks both. Run it after changing anything here.
+GROPE_DEPTH, GROPE_RATE = 22.0, 1.9     # gripper: the slow opening and closing
+TREMOR_DEPTH, TREMOR_RATE = 6.0, 3.1    # gripper: the shiver laid over it
+ROLL_DEPTH, ROLL_RATE = 14.0, 0.7       # wrist roll writhe
+NOD_DEPTH, NOD_RATE = 11.0, 1.3         # wrist bend searching nods
 
 # ---- the twitch ------------------------------------------------------ #
 FREEZE_CHANCE = 0.012   # per tick: freeze mid-sweep...
@@ -277,11 +288,22 @@ def writhe_deg(now: float, base: float, coiled: bool = False) -> dict[int, float
     wrist_home, nod = (POSE_COIL_DEG[3], NOD_DEPTH * 0.3) if coiled else (POSE_POINT_DEG[3], NOD_DEPTH)
     return {
         6: clamp_deg(6, base),
-        1: clamp_deg(1, POSE_POINT_DEG[1] + GROPE_DEPTH * math.sin(1.9 * now + 1.0)
-                     + 6.0 * math.sin(6.3 * now)),
-        2: clamp_deg(2, POSE_POINT_DEG[2] + ROLL_DEPTH * math.sin(0.7 * now)),
-        3: clamp_deg(3, wrist_home + nod * math.sin(1.3 * now + 2.1)),
+        1: clamp_deg(1, POSE_POINT_DEG[1]
+                     + GROPE_DEPTH * math.sin(GROPE_RATE * now + 1.0)
+                     + TREMOR_DEPTH * math.sin(TREMOR_RATE * now)),
+        2: clamp_deg(2, POSE_POINT_DEG[2] + ROLL_DEPTH * math.sin(ROLL_RATE * now)),
+        3: clamp_deg(3, wrist_home + nod * math.sin(NOD_RATE * now + 2.1)),
     }
+
+
+#: Every writhe oscillator, as (servo, label, depth_deg, rate_rad_s). Used by
+#: test_motion.py to police the render and current budgets above.
+WRITHE_TERMS = [
+    (1, "grope", GROPE_DEPTH, GROPE_RATE),
+    (1, "tremor", TREMOR_DEPTH, TREMOR_RATE),
+    (2, "roll", ROLL_DEPTH, ROLL_RATE),
+    (3, "nod", NOD_DEPTH, NOD_RATE),
+]
 
 
 def sweep_deg(now: float, heading_offset: float) -> float:

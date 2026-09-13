@@ -151,6 +151,7 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `pose.py` — move several joints at once and hold, for finding poses by eye
 - `servo_watch.py` — wired load diagnostic: which joint is straining, and `--relax` to limp the arm
 - `test_geometry.py` — hand-computed checks for the camera-offset trig; no hardware needed
+- `test_motion.py` — writhe budgets: is each oscillator slow enough to render, and to afford?
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless
