@@ -123,8 +123,13 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
   the arm goes limp, which is gentler than pulling the power. The wired
   diagnostic (`./servo_watch.py --strike`) reproduces the coil-and-lurch and
   ranks the joints by how far each one drifts off its commanded angle; the
-  worst offender is the one doing the work. It aborts and unloads on its own
-  if a joint drifts too far.
+  worst offender is the one doing the work. `--soak 600` runs the hunt's real
+  motion, which is what actually builds the heat; a single strike does not.
+  Read the FADING table, not the raw errors: a joint the hunt is sweeping
+  lags tens of degrees behind its command with nothing wrong, so only error
+  on a joint told to stay *still* means load, and only error that grows from
+  the start of the run to the end means heat. It aborts and unloads if a
+  stationary joint stalls, and `--no-abort` turns that off.
 - A pose is not a rest. Parking at `POSE_REST_DEG` still leaves every servo
   energised and holding, so the hunt now unloads the arm when it exits.
 - Always give a duration (`move.py` defaults to 1500 ms). A big jump with
