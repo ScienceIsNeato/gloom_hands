@@ -28,7 +28,7 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
 import math
 
 from angles import LIMITS_DEG, NAMES
-from gloom import POSE_COIL_DEG, POSE_POINT_DEG, TICK, WRITHE_TERMS, writhe_deg
+from gloom import BASE_SIGN, CAMERA, CAPTURE_SIZE, POSE_COIL_DEG, POSE_POINT_DEG, TICK, WRITHE_TERMS, writhe_deg
 
 MIN_STEPS_PER_CYCLE = 8.0   # below this a sine reads as stepping
 MAX_JOINT_SLEW = 70.0       # deg/s of continuous demand on any one joint
@@ -78,6 +78,43 @@ def main() -> int:
         if span > 40:
             bad.append(f"servo {sid} starts {span:.0f} deg from its pose")
     assert abs(writhe_deg(0.0, 0.0, coiled=True)[3] - POSE_COIL_DEG[3]) < 12, "coiled wrist drifts"
+
+    # --- tracking sense: the arm must turn TOWARD the victim -------------- #
+    # A webcam looking at you puts your right on the left of its frame. So a
+    # face left-of-centre means you stepped to YOUR right, which is the arm's
+    # LEFT, which must drive the base POSITIVE (before BASE_SIGN, which only
+    # describes how the servo is bolted on).
+    import math as _m
+
+    import gloom as _g
+    from vision import CameraPose, Detection, Locator
+    from vision.geometry import focal_px
+
+    pose = CameraPose(**dict(CAMERA, x_m=0.0, y_m=0.0, yaw_deg=0.0))
+
+    class _E:
+        _loc = Locator(pose, person_height_m=1.7)
+        _reach = 45.0
+        _bearing_at = _g.Eyes._bearing_at
+        _map_to_sweep = _g.Eyes._map_to_sweep
+
+    w, h = CAPTURE_SIZE
+    hpx = focal_px(w, pose.hfov_deg) * 0.2 / 1.5
+    def base_for(x_frac):
+        t = _E._loc.locate(Detection(x=w * x_frac, top=0.0, bottom=hpx,
+                                     frame_w=w, frame_h=h, real_height_m=0.2))
+        return _E._map_to_sweep(_E(), t)
+
+    left_of_frame, right_of_frame = base_for(0.25), base_for(0.75)
+    print(f"\n  face left of centre  -> base {left_of_frame:+6.1f} "
+          f"(must be positive: that is the arm's left)")
+    print(f"  face right of centre -> base {right_of_frame:+6.1f} (must be negative)")
+    if left_of_frame <= 0 or right_of_frame >= 0:
+        bad.append("tracking sense inverted: the arm would turn away from the victim")
+    if abs(left_of_frame + right_of_frame) > 1.0:
+        bad.append("tracking is not symmetric about the centre of the frame")
+    print(f"  BASE_SIGN {BASE_SIGN:+.0f} "
+          f"({'positive degrees swing the arm to its left' if BASE_SIGN > 0 else 'inverted for this arm'})")
 
     if bad:
         print("\nFAILED:")

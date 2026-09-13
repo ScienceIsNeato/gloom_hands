@@ -54,6 +54,10 @@ cousin, not this arm.
 
 ## Eyes
 
+By default the camera is assumed to sit **on the robot's front face**,
+looking where the arm looks. That is the rig to aim for. The offset maths
+below only earns its keep when the lens genuinely cannot live there.
+
 The `vision/` package finds the person in the webcam frame and works out
 their bearing from the **base pivot**, not from the camera, so the camera
 can sit wherever is convenient. (Its frame-differencing detector was
@@ -103,8 +107,10 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 1. `./eyes.py --hfov 60` — check a known object sits at the right angle;
    adjust `--hfov`, add `--mirrored` if left and right are swapped, then
    copy the values into `CAMERA`.
-2. Set `BASE_SIGN` in `gloom.py`: +1 if positive servo-6 degrees turn the
-   base left, -1 if right. `./move_ble.py 6 30` tells you.
+2. Confirm `BASE_SIGN`. Stand in front of the arm and run
+   `./move_ble.py 6 30`. If the hand swings toward **your right**, the
+   default `+1` is correct; if toward your left, set `-1`. Or just run the
+   hunt with `--flip` to try the other sign for one run.
 3. `./eyes.py --bench 60` on the computer that will run it. The default detector is frame differencing, which costs a
    few milliseconds. The HOG person detector (`--detector person`) sees
    people who stand still but is much heavier on a small board.

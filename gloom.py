@@ -116,9 +116,12 @@ SETTLE_MS = 450              # ...then settles back over this long
 # once range is estimated from the person's height in the frame; with a
 # zero offset it does not matter at all. Dial these in with:
 #   ./eyes.py --hfov .. --cam-x .. --cam-y .. --cam-yaw ..
-# Current rig: the camera is ~15 ft in front of the arm, facing it (the
-# arm points straight at the camera at base 0), so yaw is 180.
-CAMERA = dict(x_m=4.57, y_m=0.0, yaw_deg=180.0, hfov_deg=60.0, mirrored=False)
+# DEFAULT: the camera sits on the robot's front face, looking where the arm
+# looks. That is the sane rig and the one to aim for — the offset maths only
+# earns its keep when the lens genuinely cannot live there. To say otherwise,
+# measure from the pivot: a camera two feet to the arm's LEFT is y_m=+0.61,
+# one a room away facing back at the arm is x_m=4.57, yaw_deg=180.
+CAMERA = dict(x_m=0.0, y_m=0.0, yaw_deg=0.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
 CAPTURE_SIZE = (1280, 720)
@@ -127,7 +130,14 @@ CAPTURE_SIZE = (1280, 720)
 # "motion": legacy frame differencing, only sees movement · "person": HOG, whole bodies far away
 DETECTOR = "face"
 DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch (top, bottom)
-BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
+# Which way servo 6 turns for a positive angle: an assembly fact, not a
+# preference. +1 means positive degrees swing the arm to ITS left, which is
+# YOUR right when you are standing in front of it. Settle it in ten seconds
+# without the camera: stand in front, run  ./move_ble.py 6 30  and watch.
+#   hand goes toward your right -> +1 (this default)
+#   hand goes toward your left  -> -1
+# ./gloom.py --eyes --flip tries the other sign for one run without editing.
+BASE_SIGN = +1.0
 LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
 TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
 # TRACKING IS THE POINT, and pointing at where the victim truly stands does
@@ -293,7 +303,10 @@ class Eyes:
         w = CAPTURE_SIZE[0]
         left = self._bearing_at(w * 0.02, t.cam_range_m)
         right = self._bearing_at(w * 0.98, t.cam_range_m)
-        centre, half = (left + right) / 2, (right - left) / 2
+        # left edge of the frame is the arm's LEFT, which is a POSITIVE bearing,
+        # so the span runs left-minus-right. Getting this backwards silently
+        # inverts the whole system and looks exactly like a wrong BASE_SIGN.
+        centre, half = (left + right) / 2, (left - right) / 2
         if abs(half) < 1e-3:
             return 0.0
         frac = max(-1.0, min(1.0, (t.bearing_deg - centre) / half))
@@ -408,8 +421,13 @@ def main() -> None:
     p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "yunet", "haar", "person"),
                    help="background subtraction (default), frame differencing, face (YuNet, or Haar without its model), or HOG person")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
+    p.add_argument("--flip", action="store_true",
+                   help="invert BASE_SIGN for this run — use it to settle which way servo 6 turns")
     a = p.parse_args()
 
+    if a.flip:
+        globals()["BASE_SIGN"] = -BASE_SIGN
+        print(f"eyes: BASE_SIGN flipped to {BASE_SIGN:+.0f} for this run")
     eyes = Eyes(a.video_src, a.detector, show=a.show) if a.eyes else None
     arm = DryBackend() if a.dry else Backend(a.usb)
     print("assuming the pose...")
