@@ -86,7 +86,10 @@ SNAP_MS = 280           # how fast the snap lands (small ms = violent)
 
 # ---- the strike (only while locked on) ------------------------------- #
 COIL_EVERY_S = (6.0, 14.0)   # seconds of pointing at you before the next coil
-COIL_MS = 1800               # how slowly it draws back (menacing = slow)
+COIL_MS = 2400               # how slowly it draws back (menacing = slow, and cheaper in current)
+COIL_STAGGER_S = 0.6         # forearm folds first, THEN the shoulder leans back. Moving both
+                             # at once was the biggest current draw in the whole routine — the
+                             # coil lifts the arm against gravity, where the lurch falls with it.
 COIL_HOLD_S = (2.0, 5.0)     # how long it stays coiled, still tracking
 LURCH_MS = 500               # how fast it comes out at you (small = violent; below ~450 the
                              # servos are flat out and the supply sag can drop the Bluetooth link)
@@ -370,11 +373,18 @@ def main() -> None:
                     time.sleep(SNAP_MS / 1000 + 0.1)
                     continue
             elif now >= coil_at:
-                # STRIKE cycle: out -> coiling (slow draw back) -> coiled (hold,
-                # still tracking) -> LURCH back out with overshoot -> out
+                # STRIKE cycle: out -> folding (forearm) -> coiling (shoulder
+                # leans back) -> coiled (hold, still tracking) -> LURCH -> out.
+                # The two halves are deliberately staggered: folding the elbow
+                # and leaning the shoulder together is what browned out the
+                # supply, and a creature drawing back does it in that order
+                # anyway.
                 if coil == "out":
                     print("...drawing back")
-                    arm.send({**POSE_COIL_DEG, 6: clamp_deg(6, base)}, COIL_MS)
+                    arm.send({sid: POSE_COIL_DEG[sid] for sid in (4, 3)}, COIL_MS)
+                    coil, coil_at = "folding", now + COIL_STAGGER_S
+                elif coil == "folding":
+                    arm.send({5: POSE_COIL_DEG[5], 6: clamp_deg(6, base)}, COIL_MS)
                     coil, coil_at = "coiling", now + COIL_MS / 1000
                 elif coil == "coiling":
                     coil, coil_at = "coiled", now + random.uniform(*COIL_HOLD_S)

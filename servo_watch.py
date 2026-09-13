@@ -61,8 +61,8 @@ import xarm
 
 from angles import NAMES, servo_units, units_to_deg
 from gloom import (
-    COIL_EVERY_S, COIL_HOLD_S, COIL_MS, LURCH_MS, LURCH_OVERSHOOT_DEG, POSE_COIL_DEG,
-    POSE_POINT_DEG, POSE_REST_DEG, SETTLE_MS, TICK, sweep_deg, writhe_deg,
+    COIL_EVERY_S, COIL_HOLD_S, COIL_MS, COIL_STAGGER_S, LURCH_MS, LURCH_OVERSHOOT_DEG,
+    POSE_COIL_DEG, POSE_POINT_DEG, POSE_REST_DEG, SETTLE_MS, TICK, sweep_deg, writhe_deg,
 )
 
 JOINTS = (1, 2, 3, 4, 5, 6)
@@ -76,9 +76,13 @@ class Watch:
         # (seconds, phase, {servo: (error_deg, holding)}, volts)
         self.samples: list[tuple[float, str, dict[int, tuple[float, bool]], float | None]] = []
         self._cmd_log: dict[int, list[float]] = {}
+        self.events: list[tuple[float, str]] = []   # (seconds, what the rig just did)
         self.t0 = time.monotonic()
 
     # -- talking to the arm ------------------------------------------------ #
+    def note(self, what: str) -> None:
+        self.events.append((time.monotonic() - self.t0, what))
+
     def send(self, pose: dict[int, float], dur_ms: int) -> None:
         self.arm.setPosition(
             [xarm.Servo(sid, servo_units(sid, d)) for sid, d in pose.items()], dur_ms, wait=False
@@ -167,12 +171,18 @@ class Watch:
 
             if now >= coil_at:
                 if coil == "out":
-                    self.send({**POSE_COIL_DEG, 6: base}, COIL_MS)
+                    self.note("coil-fold")
+                    self.send({sid: POSE_COIL_DEG[sid] for sid in (4, 3)}, COIL_MS)
+                    coil, coil_at = "folding", now + COIL_STAGGER_S
+                elif coil == "folding":
+                    self.note("coil-lean")
+                    self.send({5: POSE_COIL_DEG[5], 6: base}, COIL_MS)
                     coil, coil_at = "coiling", now + COIL_MS / 1000
                 elif coil == "coiling":
                     coil, coil_at = "coiled", now + random.uniform(*COIL_HOLD_S)
                 else:
                     strikes += 1
+                    self.note("lurch")
                     strike = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
                     strike[5] = strike[5] + LURCH_OVERSHOOT_DEG
                     self.send({**strike, 6: base}, LURCH_MS)
@@ -260,12 +270,36 @@ class Watch:
                     print(f"    servo {sid} {NAMES.get(sid, '?'):11s} {a:5.2f} -> {b:5.2f}   "
                           f"{verdict}{mark}")
 
-        volts = [v for _, _, _, v in self.samples if v]
-        if volts:
-            sag = max(volts) - min(volts)
-            verdict = "healthy" if sag < 0.5 else "sagging badly — suspect the supply"
-            print(f"\n  supply: {max(volts):.2f} V high, {min(volts):.2f} V low, "
-                  f"sag {sag:.2f} V ({verdict})")
+        rows = [(t, v) for t, _, _, v in self.samples if v]
+        if rows:
+            volts = [v for _, v in rows]
+            hi, lo = max(volts), min(volts)
+            print(f"\n=== SUPPLY ===")
+            print(f"  {hi:.2f} V high, {lo:.2f} V low, sag {hi - lo:.2f} V")
+            if lo < 6.5:
+                print("  !! BROWNOUT. Bus servos raise their alarm tone on under-voltage as")
+                print("     readily as on heat, and the controller can drop its radio. This is")
+                print("     a power problem before it is a motion problem.")
+            elif hi - lo > 1.0:
+                print("  !  sagging hard under load — the supply is close to its limit.")
+            deepest = sorted(rows, key=lambda tv: tv[1])[:6]
+            if self.events and deepest:
+                print("\n  deepest dips, and what the arm had just been told to do:")
+                for t, v in sorted(deepest):
+                    prior = [(te, w) for te, w in self.events if te <= t]
+                    when = (f"{t - prior[-1][0]:.1f}s after a {prior[-1][1]}"
+                            if prior else "before the first move")
+                    print(f"    t={t:6.1f}s  {v:5.2f} V   {when}")
+                by_move: dict[str, list[float]] = {}
+                for t, v in rows:
+                    prior = [(te, w) for te, w in self.events if te <= t and t - te <= 2.5]
+                    if prior:
+                        by_move.setdefault(prior[-1][1], []).append(v)
+                if by_move:
+                    print("\n  lowest voltage within 2.5 s of each kind of move:")
+                    for what, vs in sorted(by_move.items(), key=lambda kv: min(kv[1])):
+                        print(f"    {what:6s}  min {min(vs):5.2f} V   mean {sum(vs)/len(vs):5.2f} V "
+                              f"({len(vs)} samples)")
 
 
 def main() -> None:

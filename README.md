@@ -118,8 +118,11 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 
 ## Safety notes
 
-- **If a servo starts emitting a tone, it is the overload alarm.** Something
-  is stalled or overheating. `./servo_watch.py --relax` cuts the motors and
+- **If a servo starts emitting a tone, it is the alarm.** These servos raise
+  it for under-voltage as readily as for heat, and on this arm the cause
+  measured out to be a supply brownout, not a hot joint: the pack fell from
+  9.0 V to 4.9 V during the coil. Check power before you go hunting for a
+  stalled servo. `./servo_watch.py --relax` cuts the motors and
   the arm goes limp, which is gentler than pulling the power. The wired
   diagnostic (`./servo_watch.py --strike`) reproduces the coil-and-lurch and
   ranks the joints by how far each one drifts off its commanded angle; the

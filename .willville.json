@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Chasing down a servo that starts whining after the arm lunges and holds itself out straight. Built a wired probe that watches every joint and says which one is straining, plus a panic button that limps the arm instead of yanking its power.",
-    "direction": "Plug in the cable, catch it in the act, then reshape the lunge so it stops parking on the joint that is working hardest",
+    "status": "Tracked down the servo whine — it is not a hot motor, the power pack is browning out to 5 volts when the arm hauls itself back into its coil. Split that move into two so it draws less at once.",
+    "direction": "Confirm what power supply is actually feeding the arm, since that may be the whole story, then soak it again and watch for the tone",
     "last_update": "2026-09-12T00:00:00Z"
   }
 }
