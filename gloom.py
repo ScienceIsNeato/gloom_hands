@@ -142,6 +142,16 @@ TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on it
 # victim's own distance, so the camera pose and yaw are still honoured and
 # the response stays even whether they are at the lens or at the arm.
 TRACK_FILL = 0.85       # of SWEEP_LO..SWEEP_HI that a full frame crossing uses
+# Following the victim is now worth 90 degrees of base travel instead of 18,
+# and a face that jumps across the frame between two ticks would ask for that
+# in a fifth of a second — over 400 deg/s, six times the busiest writhe joint,
+# on a supply already known to brown out. So the base is allowed to CHASE at a
+# bounded rate rather than teleport. It still gets there, just not all at once,
+# and a head that swings round smoothly is more menacing than one that snaps.
+TRACK_SLEW_DPS = 75.0   # how fast the base may follow, degrees per second
+SNAP_SLEW_DPS = 200.0   # ...and how fast the first lunge of attention may be. Faster than
+                        # tracking, because noticing you should look like noticing you, but
+                        # still bounded: a 90 degree snap in SNAP_MS would be 320 deg/s.
 TRACK_NOMINAL_M = 1.2   # a typical standing distance, for the startup message
 LOST_AFTER_S = 4.0      # nobody seen for this long -> back to the hunt
 
@@ -237,6 +247,7 @@ class Eyes:
         print(f"eyes: crossing the frame swings the base {2 * self._reach:.0f} deg "
               f"(true angle at {TRACK_NOMINAL_M:.1f} m would be {self._frame_span():.0f})")
         self._smooth = Smoother(window=LOCK_SMOOTH)
+        self._last_base, self._last_at = 0.0, time.monotonic()
         self._frame = None
         self._ended = False
         self._lock = threading.Lock()
@@ -320,7 +331,15 @@ class Eyes:
         deg = BASE_SIGN * self._map_to_sweep(t)
         if first:
             self._smooth.reset(deg)  # snap straight there, no lag from the old average
-        return self._smooth.push(deg), t
+            self._last_base, self._last_at = deg, time.monotonic()
+            return deg, t
+        deg = self._smooth.push(deg)
+        # Chase, do not teleport: cap how fast the base is allowed to follow.
+        now = time.monotonic()
+        budget = TRACK_SLEW_DPS * max(1e-3, now - self._last_at)
+        deg = max(self._last_base - budget, min(self._last_base + budget, deg))
+        self._last_base, self._last_at = deg, now
+        return deg, t
 
     def _draw(self, d, t, ms: float) -> None:  # noqa: ANN001
         from vision.preview import draw
@@ -405,6 +424,7 @@ def main() -> None:
     last_seen = -1e9      # when the eyes last saw someone
     locked = False
     last_report = -1e9    # when we last showed the tracking on stdout
+    prev_base = base      # where the base was before the latest tracked update
     coil = "out"          # "out" (pointing) / "coiling" / "coiled" — the strike cycle
     coil_at = 0.0         # when the next phase of the strike cycle happens
     try:
@@ -428,11 +448,17 @@ def main() -> None:
                         locked = True
                         last_seen = now
                         coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
-                        arm.send({6: base}, SNAP_MS)
-                        time.sleep(SNAP_MS / 1000 + 0.1)
+                        # Fast, but never faster than SNAP_SLEW_DPS: a snap right
+                        # across the sweep at a fixed SNAP_MS is a current spike.
+                        travel = abs(base - prev_base)
+                        dur = max(SNAP_MS, int(1000 * travel / SNAP_SLEW_DPS))
+                        arm.send({6: base}, dur)
+                        time.sleep(dur / 1000 + 0.1)
+                        prev_base = base
                         last_report = now
                         continue
                     last_seen = now
+                    prev_base = base
                     if now - last_report >= 1.5:  # show that it is still following
                         state = "coiled" if coil != "out" else "tracking"
                         print(f"  {state}: face {t.cam_bearing_deg:+5.1f} deg at "

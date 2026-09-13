@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Tracked down the servo whine — it is not a hot motor, the power pack is browning out to 5 volts when the arm hauls itself back into its coil. Split that move into two so it draws less at once.",
-    "direction": "Confirm what power supply is actually feeding the arm, since that may be the whole story, then soak it again and watch for the tone",
-    "last_update": "2026-09-12T00:00:00Z"
+    "status": "The arm follows faces properly now, but making it move that much more is probably what set off the alarm, so its turning speed is capped. Added a kill switch that works without yanking the power.",
+    "direction": "Check whether the power brick is actually holding up under load, since the alarm keeps coming back to that",
+    "last_update": "2026-09-13T00:00:00Z"
   }
 }
