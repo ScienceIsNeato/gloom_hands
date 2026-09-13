@@ -77,16 +77,17 @@ differs is the person; cheapest option that keeps a still person),
 follows the person across frames and holds position when the detector
 blinks. Press `d` in the window to cycle detectors, `s` to save a frame.
 
-**How far the base actually swings depends on where the person is, not
-just which way.** Someone standing next to the camera but far from the arm
-barely moves in the arm's frame, so the base twitches a few degrees;
-someone out near the arm swings it through tens of degrees. With the
-camera 4.6 m in front of the arm, a person 0.9 m from the lens crossing
-the entire field of view moves the base about 12 degrees, while a person
-3.5 m from the lens moves it through about 93. That is correct, not a
-bug, but it means desk testing looks dead. To watch the tracking work up
-close, temporarily set `x_m=0.0, yaw_deg=0.0` in `CAMERA`, which makes the
-arm mirror the camera one-for-one.
+**The base follows where the victim sits across the frame**, mapped onto
+its sweep range, so walking from one side of the picture to the other
+swings the arm through most of its travel wherever you are standing.
+That mapping is computed through the camera-offset geometry at the
+victim's own distance rather than being a fudge factor, so a camera
+mounted off to one side still points the arm at the right side of the
+room. Pointing at the victim's literal computed bearing was the obvious
+alternative and is a trap: with the camera 4.6 m from the arm it produces
+about 18 degrees of travel for someone at the lens, and about 90 for a
+single step by someone standing at the arm. `TRACK_FILL` sets how much of
+the sweep a full frame crossing uses.
 
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep

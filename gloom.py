@@ -96,7 +96,8 @@ SNAP_CHANCE = 0.010     # per tick: sudden fast snap to a new heading
 SNAP_MS = 280           # how fast the snap lands (small ms = violent)
 
 # ---- the strike (only while locked on) ------------------------------- #
-COIL_EVERY_S = (6.0, 14.0)   # seconds of pointing at you before the next coil
+COIL_EVERY_S = (11.0, 24.0)  # seconds of TRACKING you before the next coil. The strike is
+                             # punctuation; following the victim is the sentence.
 COIL_MS = 2400               # how slowly it draws back (menacing = slow, and cheaper in current)
 COIL_STAGGER_S = 0.6         # forearm folds first, THEN the shoulder leans back. Moving both
                              # at once was the biggest current draw in the whole routine — the
@@ -129,6 +130,19 @@ DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch 
 BASE_SIGN = +1.0        # +1 if POSITIVE servo-6 degrees turn the base LEFT; -1 if right. Verify on the arm.
 LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
 TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
+# TRACKING IS THE POINT, and pointing at where the victim truly stands does
+# not deliver it. That angle is honest but useless at both ends: with the
+# camera 4.6 m from the arm, someone beside the lens crossing the entire
+# frame moves the base about 18 degrees, while someone standing next to the
+# arm swings it through 90 for a single step. Range comes from apparent face
+# height and is rough, so the second case is jittery as well as violent.
+#
+# Instead the victim's position ACROSS THE FRAME is mapped onto the arm's
+# sweep. The mapping runs through the same offset geometry, evaluated at the
+# victim's own distance, so the camera pose and yaw are still honoured and
+# the response stays even whether they are at the lens or at the arm.
+TRACK_FILL = 0.85       # of SWEEP_LO..SWEEP_HI that a full frame crossing uses
+TRACK_NOMINAL_M = 1.2   # a typical standing distance, for the startup message
 LOST_AFTER_S = 4.0      # nobody seen for this long -> back to the hunt
 
 
@@ -219,6 +233,9 @@ class Eyes:
         self._loc = Locator(pose, person_height_m=PERSON_HEIGHT_M, range_clamp_m=(0.4, max_range))
         if facing_pivot:
             print(f"eyes: camera faces the arm {gap:.1f} m away; distance capped at {max_range:.1f} m")
+        self._reach = (SWEEP_HI_DEG - SWEEP_LO_DEG) / 2 * TRACK_FILL
+        print(f"eyes: crossing the frame swings the base {2 * self._reach:.0f} deg "
+              f"(true angle at {TRACK_NOMINAL_M:.1f} m would be {self._frame_span():.0f})")
         self._smooth = Smoother(window=LOCK_SMOOTH)
         self._frame = None
         self._ended = False
@@ -228,6 +245,48 @@ class Eyes:
         fps = self._cam.get(cv2.CAP_PROP_FPS) if isinstance(src, str) else 0.0
         self._pace = 1.0 / fps if fps and fps > 0 else 0.0
         threading.Thread(target=self._pump, daemon=True).start()
+
+    def _frame_span(self) -> float:
+        """Base travel, in degrees, for a victim crossing the frame at the
+        nominal distance — before any gain is applied."""
+        from vision import Detection
+        from vision.geometry import focal_px
+
+        w, h = CAPTURE_SIZE
+        face_m = 0.2
+        hpx = focal_px(w, CAMERA["hfov_deg"]) * face_m / TRACK_NOMINAL_M
+        edges = [
+            self._loc.locate(Detection(x=x, top=0.0, bottom=hpx, frame_w=w, frame_h=h,
+                                       real_height_m=face_m)).bearing_deg
+            for x in (w * 0.05, w * 0.95)
+        ]
+        return abs(edges[1] - edges[0])
+
+    def _bearing_at(self, x_px: float, range_m: float, face_m: float = 0.2) -> float:
+        """Pivot bearing of someone at this column of the frame and this range."""
+        from vision import Detection
+        from vision.geometry import focal_px
+
+        w, h = CAPTURE_SIZE
+        hpx = focal_px(w, CAMERA["hfov_deg"]) * face_m / max(0.05, range_m)
+        return self._loc.locate(
+            Detection(x=x_px, top=0.0, bottom=hpx, frame_w=w, frame_h=h, real_height_m=face_m)
+        ).bearing_deg
+
+    def _map_to_sweep(self, t) -> float:  # noqa: ANN001 - a vision.Target
+        """Where the victim sits across the frame, as a base angle.
+
+        The frame edges are re-evaluated at the victim's OWN distance every
+        time, so this is the real geometry rather than a fudge factor, and it
+        cannot saturate the way a flat gain does when they come close."""
+        w = CAPTURE_SIZE[0]
+        left = self._bearing_at(w * 0.02, t.cam_range_m)
+        right = self._bearing_at(w * 0.98, t.cam_range_m)
+        centre, half = (left + right) / 2, (right - left) / 2
+        if abs(half) < 1e-3:
+            return 0.0
+        frac = max(-1.0, min(1.0, (t.bearing_deg - centre) / half))
+        return frac * self._reach
 
     def _pump(self) -> None:
         while True:
@@ -258,7 +317,7 @@ class Eyes:
             self._draw(d, t, 1000 * (time.perf_counter() - t0))
         if t is None:
             return None
-        deg = BASE_SIGN * t.bearing_deg
+        deg = BASE_SIGN * self._map_to_sweep(t)
         if first:
             self._smooth.reset(deg)  # snap straight there, no lag from the old average
         return self._smooth.push(deg), t
@@ -345,6 +404,7 @@ def main() -> None:
     frozen_until = 0.0
     last_seen = -1e9      # when the eyes last saw someone
     locked = False
+    last_report = -1e9    # when we last showed the tracking on stdout
     coil = "out"          # "out" (pointing) / "coiling" / "coiled" — the strike cycle
     coil_at = 0.0         # when the next phase of the strike cycle happens
     try:
@@ -370,8 +430,14 @@ def main() -> None:
                         coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
                         arm.send({6: base}, SNAP_MS)
                         time.sleep(SNAP_MS / 1000 + 0.1)
+                        last_report = now
                         continue
                     last_seen = now
+                    if now - last_report >= 1.5:  # show that it is still following
+                        state = "coiled" if coil != "out" else "tracking"
+                        print(f"  {state}: face {t.cam_bearing_deg:+5.1f} deg at "
+                              f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg")
+                        last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
                     print("lost it... resuming the hunt")
                     locked = False
