@@ -119,7 +119,12 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 
 ## Safety notes
 
-- **If a servo starts emitting a tone, it is the alarm.** These servos raise
+- **If a servo starts emitting a tone, run `./relax.py`** (add `--usb` when
+  wired). It cuts the motors and the arm goes slack, so support it first if
+  it is holding out over an edge. Stopping the hunt is not enough on its
+  own: the servos keep holding their last position, and their last position
+  is what they are complaining about.
+- **The tone is the servo alarm.** These servos raise
   it for under-voltage as readily as for heat, and on this arm the cause
   measured out to be a supply brownout, not a hot joint: the pack fell from
   9.0 V to 4.9 V during the coil. Check power before you go hunting for a
@@ -149,6 +154,7 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `eyes.py` — preview and benchmark the tracking with gloom.py's camera settings
 - `vision/` — detectors, camera geometry, tracker (`detector.py`, `geometry.py`, `tracking.py`, `preview.py`)
 - `gloom_hand_demo.py` — single-file blind hunt for copying to any machine
+- `relax.py` — panic button: unload every servo, wired or wireless
 - `pose.py` — move several joints at once and hold, for finding poses by eye
 - `servo_watch.py` — wired load diagnostic: which joint is straining, and `--relax` to limp the arm
 - `test_geometry.py` — hand-computed checks for the camera-offset trig; no hardware needed
