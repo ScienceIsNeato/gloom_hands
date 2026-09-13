@@ -98,7 +98,11 @@ While locked the base follows the person and the writhe continues; after
 from wherever it is. Every `COIL_EVERY_S` or so while locked it draws
 back into `POSE_COIL_DEG` (slowly), sits coiled for `COIL_HOLD_S` still
 tracking you, then lurches back out to the point pose in `LURCH_MS` with
-a shoulder overshoot. Find the coil pose on the arm with
+a snap of the wrist as it lands. That overshoot used to be on the
+shoulder, which drove the heaviest joint past its most cantilevered pose
+at the end of a fast move and then reversed it under full load — the
+instant the overload alarm always fired. `LURCH_OVERSHOOT_JOINT` puts it
+back on servo 5 if you want the old violence. Find the coil pose on the arm with
 `./pose.py 5=-12 4=80 3=12` (or `./pose.py coil 4=60` to tweak one joint)
 and paste the numbers into `POSE_COIL_DEG`. Keep `LURCH_MS` at 450 or
 above: faster than that the servos are flat out and the supply sag can

@@ -62,7 +62,8 @@ import xarm
 from angles import NAMES, servo_units, units_to_deg
 from gloom import (
     COIL_EVERY_S, COIL_HOLD_S, COIL_MS, COIL_STAGGER_S, LURCH_MS, LURCH_OVERSHOOT_DEG,
-    POSE_COIL_DEG, POSE_POINT_DEG, POSE_REST_DEG, SETTLE_MS, TICK, sweep_deg, writhe_deg,
+    POSE_COIL_DEG, POSE_POINT_DEG, POSE_REST_DEG, SETTLE_MS, SHOULDER_SETTLE, TICK,
+    lurch_pose, sweep_deg, writhe_deg,
 )
 
 JOINTS = (1, 2, 3, 4, 5, 6)
@@ -138,6 +139,20 @@ class Watch:
             print(f"  [{phase}] t={t:6.1f}s {v}  {cells}   {tail}")
         return worst_sid, abs(worst)
 
+    def watch_through(self, phase: str, seconds: float, period: float = 0.1) -> None:
+        """Sample hard for a short window instead of sleeping through it.
+
+        The lurch used to be a blocking sleep, so the one instant that
+        matters — the arm arriving at full extension and having to arrest
+        and hold it — was never sampled at all."""
+        end = time.monotonic() + seconds
+        while True:
+            self.sample(phase)
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(period, left))
+
     def hold_and_watch(self, phase: str, seconds: float, hz: float, abort_deg: float) -> bool:
         over = 0
         deadline = time.monotonic() + seconds
@@ -183,12 +198,13 @@ class Watch:
                 else:
                     strikes += 1
                     self.note("lurch")
-                    strike = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
-                    strike[5] = strike[5] + LURCH_OVERSHOOT_DEG
+                    strike = lurch_pose()
                     self.send({**strike, 6: base}, LURCH_MS)
-                    time.sleep(LURCH_MS / 1000)
-                    self.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
-                    time.sleep(SETTLE_MS / 1000)
+                    self.watch_through("lurching", LURCH_MS / 1000)
+                    self.note("arrive")
+                    if SHOULDER_SETTLE:
+                        self.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
+                    self.watch_through("arriving", SETTLE_MS / 1000 + 0.6)
                     print(f"  -- strike {strikes} at t={now:.0f}s --")
                     coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
                     continue
@@ -340,12 +356,13 @@ def main() -> None:
             ok = w.hold_and_watch("coiled", 3.0, a.hz, a.abort_deg)
             if ok:
                 print("LURCH")
-                strike = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
-                strike[5] = strike[5] + LURCH_OVERSHOOT_DEG
+                strike = lurch_pose()
                 w.send(strike, LURCH_MS)
-                time.sleep(LURCH_MS / 1000)
-                w.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
-                time.sleep(SETTLE_MS / 1000 + 0.4)  # let it arrive before we judge it
+                w.watch_through("lurching", LURCH_MS / 1000)
+                w.note("arrive")
+                if SHOULDER_SETTLE:
+                    w.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
+                w.watch_through("arriving", SETTLE_MS / 1000 + 0.4)
                 print(f"holding full extension for {a.seconds:.0f}s")
                 ok = w.hold_and_watch("extended", a.seconds, a.hz, a.abort_deg)
         elif a.hold:

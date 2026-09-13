@@ -105,8 +105,17 @@ COIL_STAGGER_S = 0.6         # forearm folds first, THEN the shoulder leans back
 COIL_HOLD_S = (2.0, 5.0)     # how long it stays coiled, still tracking
 LURCH_MS = 500               # how fast it comes out at you (small = violent; below ~450 the
                              # servos are flat out and the supply sag can drop the Bluetooth link)
-LURCH_OVERSHOOT_DEG = 10.0   # shoulder past the point pose at the end of the lurch...
+# The overshoot that makes the lunge land hard used to be on the SHOULDER,
+# driving the heaviest joint 10 degrees PAST a pose that is already maximum
+# cantilever, at the end of a fast move, and then reversing it. That is the
+# worst instant in the whole routine and it is exactly when the alarm sounds.
+# The WRIST carries only the hand, so it can snap for free and still reads as
+# the lunge landing. Put it back on servo 5 if you want the old violence and
+# have the power budget for it.
+LURCH_OVERSHOOT_JOINT = 3    # 3 = wrist (cheap), 5 = shoulder (what used to sing)
+LURCH_OVERSHOOT_DEG = 14.0   # past the point pose as the lunge lands...
 SETTLE_MS = 450              # ...then settles back over this long
+SHOULDER_SETTLE = False      # only needed when the overshoot is on the shoulder
 
 # ---- the eyes (--eyes) ----------------------------------------------- #
 # Where the camera sits, measured from the BASE PIVOT, looking down from
@@ -211,7 +220,7 @@ class DryBackend:
         print("  (relax)")
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
-        if 4 in moves_deg or 5 in moves_deg:
+        if {3, 4, 5} & moves_deg.keys():
             joints = " ".join(f"s{sid}={d:+.0f}" for sid, d in sorted(moves_deg.items()))
             print(f"  pose -> {joints} over {dur_ms} ms")
         elif 6 in moves_deg:
@@ -369,6 +378,15 @@ class Eyes:
             self._cv2.destroyAllWindows()
 
 
+def lurch_pose() -> dict[int, float]:
+    """The pose the strike lands in: the point pose, with one joint driven
+    past it so the lunge arrives with a snap instead of a glide."""
+    pose = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
+    sid = LURCH_OVERSHOOT_JOINT
+    pose[sid] = clamp_deg(sid, pose[sid] + LURCH_OVERSHOOT_DEG)
+    return pose
+
+
 def writhe_deg(now: float, base: float, coiled: bool = False) -> dict[int, float]:
     """WRITHE: independent slow oscillators so nothing ever repeats — the
     gripper gropes, the wrist rolls and nods, the base holds its heading.
@@ -522,11 +540,12 @@ def main() -> None:
                     coil, coil_at = "coiled", now + random.uniform(*COIL_HOLD_S)
                 else:
                     print("LURCH")
-                    strike = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
-                    strike[5] = clamp_deg(5, strike[5] + LURCH_OVERSHOOT_DEG)
-                    arm.send({**strike, 6: clamp_deg(6, base)}, LURCH_MS)
+                    arm.send({**lurch_pose(), 6: clamp_deg(6, base)}, LURCH_MS)
                     time.sleep(LURCH_MS / 1000)
-                    arm.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
+                    # Let the snapped joint relax back to the pose it overshot.
+                    relax_sid = LURCH_OVERSHOOT_JOINT
+                    if SHOULDER_SETTLE or relax_sid != 5:
+                        arm.send({relax_sid: POSE_POINT_DEG[relax_sid]}, SETTLE_MS)
                     coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
                     continue
 

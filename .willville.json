@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The arm follows faces properly now, but making it move that much more is probably what set off the alarm, so its turning speed is capped. Added a kill switch that works without yanking the power.",
-    "direction": "Check whether the power brick is actually holding up under load, since the alarm keeps coming back to that",
+    "status": "The arm follows faces correctly now. Still chasing the alarm that goes off the instant it finishes lunging — turns out my own test was asleep during exactly that second, so I fixed that and made the lunge land on the wrist instead of the shoulder.",
+    "direction": "Soak it again and watch the lunge itself, which nothing has actually measured yet",
     "last_update": "2026-09-13T00:00:00Z"
   }
 }
