@@ -326,6 +326,42 @@ class FaceDetector:
 
 YUNET_MODEL = "face_detection_yunet_2023mar.onnx"
 YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/" + YUNET_MODEL
+#: What a good download looks like. Checked only to explain a failure, never
+#: to gate one, so a legitimate upstream update does not lock anybody out.
+YUNET_BYTES = 232589
+YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+
+
+def _diagnose_model(path: str) -> str:
+    """Why OpenCV would not parse this file. Almost always the download."""
+    import hashlib
+    import os
+
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            head = fh.read(512)
+        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    except OSError as err:
+        return f"could not even read it: {err}"
+
+    stripped = head.lstrip()
+    if stripped[:1] == b"<" or b"<!DOCTYPE" in head or b"<html" in stripped[:200].lower():
+        return (f"that file is a WEB PAGE, not a model ({size} bytes). The URL 404'd and curl "
+                f"saved the error page. Check the URL for a typo and re-download with "
+                f"curl -fL, which makes curl fail instead of saving the error.")
+    if head.startswith(b"version https://git-lfs"):
+        return ("that file is a Git LFS pointer, not the model. Use the /raw/ URL, which "
+                "redirects to the real content.")
+    if size != YUNET_BYTES:
+        return (f"that file is {size} bytes; a good {YUNET_MODEL} is {YUNET_BYTES}. "
+                f"The download was truncated or went somewhere else. Re-download with curl -fL.")
+    if digest != YUNET_SHA256:
+        return (f"the size is right but the contents are not (sha256 {digest[:16]}..., "
+                f"expected {YUNET_SHA256[:16]}...). Re-download it.")
+    return ("the file looks like the model we expect, so this may genuinely be an OpenCV "
+            "version problem. This needs opencv-python 4.x; the 5.0 wheels use a different "
+            "ONNX engine and want the 2026may model instead.")
 
 
 def yunet_model_path() -> str | None:
@@ -366,7 +402,17 @@ class YuNetDetector:
         self.scale = scale
         self.face_height_m = face_height_m
         self.debug = debug
-        self._net = cv2.FaceDetectorYN.create(model, "", (320, 320), score_threshold, nms_threshold, 5000)
+        try:
+            self._net = cv2.FaceDetectorYN.create(
+                model, "", (320, 320), score_threshold, nms_threshold, 5000
+            )
+        except cv2.error as err:  # a bad download is far likelier than a bad build
+            raise RuntimeError(
+                f"could not load the YuNet face model at {model}:\n"
+                f"  {_diagnose_model(model)}\n"
+                f"  correct file: {YUNET_URL}\n"
+                f"  (OpenCV said: {str(err).strip().splitlines()[-1][:120]})"
+            ) from None
         self._size = (320, 320)
         self.roi_y0 = 0
         self.frame_w = 0
@@ -476,8 +522,18 @@ _warned_haar = False
 def make_detector(kind: str, **kwargs):  # noqa: ANN201 - factory over all detector classes
     global _warned_haar
     if kind == "face":
-        if yunet_model_path():
-            return YuNetDetector(**kwargs)
+        path = yunet_model_path()
+        if path:
+            try:
+                return YuNetDetector(**kwargs)
+            except RuntimeError as err:
+                # A broken model file must not take the whole prop down on
+                # Halloween night. Say loudly what is wrong, then carry on
+                # with the cascades so something still watches the door.
+                print(f"\n[vision] {err}\n[vision] falling back to Haar cascades, which are "
+                      f"much worse at this. Fix the model file when you can.\n")
+                return FaceDetector(**{k: v for k, v in kwargs.items()
+                                       if k in ("scale", "debug", "min_face_px")})
         if not _warned_haar:
             _warned_haar = True
             print(f"[vision] 'face' is using Haar cascades; for the far better YuNet detector "

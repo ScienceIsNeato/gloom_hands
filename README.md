@@ -213,7 +213,8 @@ access your camera*.
 arm's address, which is a MAC on Windows and a different UUID on macOS, so
 it is tagged with the platform that wrote it and ignored elsewhere) and
 `vision/models/*.onnx` (the YuNet face model — re-download it, see
-`vision/models/README.md`).
+`vision/models/README.md`, and use `curl -fL` so a 404 page cannot land in
+the file; it should be 232589 bytes).
 
 ## Note for cloners
 
