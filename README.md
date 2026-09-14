@@ -93,6 +93,14 @@ about 18 degrees of travel for someone at the lens, and about 90 for a
 single step by someone standing at the arm. `TRACK_FILL` sets how much of
 the sweep a full frame crossing uses.
 
+Tracking lag is a budget, not a single number. Averaging readings costs
+about (N-1)/2 ticks of delay, so `LOCK_SMOOTH` buys steadiness with
+responsiveness. `TRACK_SLEW_DPS` caps how fast the base may turn, and
+crossing the sweep at that rate is usually the largest single term. The
+base is a yaw joint, so gravity never opposes it and it is the cheapest
+thing on the arm to move quickly; the shoulder and elbow are where the
+current goes. If the overload alarm ever returns, throttle those, not this.
+
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep
 from wherever it is. Every `COIL_EVERY_S` or so while locked it draws

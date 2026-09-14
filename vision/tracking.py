@@ -52,7 +52,7 @@ class Tracker:
         coast_s: float = 2.5,
         gate_frac: float = 0.2,
         size_alpha: float = 0.3,
-        pos_alpha: float = 0.5,
+        pos_alpha: float = 0.75,   # how much of each new reading to take; higher = less lag
         vel_alpha: float = 0.1,
         switch_after: int = 3,
     ) -> None:

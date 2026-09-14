@@ -147,7 +147,12 @@ DETECT_ROI = (0.0, 1.0)  # motion detector: fraction of the frame rows to watch 
 #   hand goes toward your left  -> -1
 # ./gloom.py --eyes --flip tries the other sign for one run without editing.
 BASE_SIGN = +1.0
-LOCK_SMOOTH = 4         # readings averaged while locked (at TICK rate; small = twitchy)
+# Averaging readings costs lag directly: an N-sample mean delays by about
+# (N-1)/2 ticks. Worse, the smoother rejects readings that sit far from the
+# window mean, and a person moving quickly looks exactly like that, so it was
+# throwing away the very samples that carry the movement. YuNet's face boxes
+# are clean enough not to need much of either.
+LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = twitchy)
 TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
 # TRACKING IS THE POINT, and pointing at where the victim truly stands does
 # not deliver it. That angle is honest but useless at both ends: with the
@@ -167,7 +172,12 @@ TRACK_FILL = 0.85       # of SWEEP_LO..SWEEP_HI that a full frame crossing uses
 # on a supply already known to brown out. So the base is allowed to CHASE at a
 # bounded rate rather than teleport. It still gets there, just not all at once,
 # and a head that swings round smoothly is more menacing than one that snaps.
-TRACK_SLEW_DPS = 75.0   # how fast the base may follow, degrees per second
+# The base is a YAW joint: it turns about a vertical axis, so gravity never
+# opposes it and it only has to beat inertia and friction. It is the cheapest
+# joint on the arm to move, and throttling it hard to protect the supply was
+# aiming at the wrong target — the shoulder and elbow are what lift weight.
+# 75 deg/s meant 1.2 s to cross the sweep, which is most of the lag you feel.
+TRACK_SLEW_DPS = 220.0  # how fast the base may follow, degrees per second
 SNAP_SLEW_DPS = 200.0   # ...and how fast the first lunge of attention may be. Faster than
                         # tracking, because noticing you should look like noticing you, but
                         # still bounded: a 90 degree snap in SNAP_MS would be 320 deg/s.
