@@ -5,7 +5,7 @@ searching when it finds one.
 
     ./gloom.py                 # wireless (BLE), blind hunt
     ./gloom.py --usb           # wired
-    ./gloom.py --eyes          # webcam: lock the base onto whoever is there
+    ./gloom.py --eyes          # dormant until a face shows up, then hunts
     ./gloom.py --eyes --dry    # no arm: print what it would send (test the eyes)
     ./gloom.py --eyes --dry --show      # ...and open a window showing what it sees
     ./gloom.py --eyes --detector face   # Haar face detector instead of frame differencing
@@ -18,6 +18,10 @@ soft-limited per angles.LIMITS_DEG). Three layers of creep, tunable below:
   3. TWITCH — random freezes ("...did it hear something?") and sudden fast
               snaps to a new heading
 ...and with --eyes a fourth:
+  0. SLEEP  — with --eyes the arm starts limp and unpowered and stays that
+              way until a face has been there for WAKE_AFTER_S. It lets go
+              again after SLEEP_AFTER_S with nobody in sight. Everything
+              below only happens in between.
   4. LOCK   — the vision package finds the person in the webcam
               frame and works out their bearing from the BASE PIVOT (the
               camera can sit anywhere: see CAMERA below). The base snaps to
@@ -153,6 +157,15 @@ BASE_SIGN = +1.0
 # throwing away the very samples that carry the movement. YuNet's face boxes
 # are clean enough not to need much of either.
 LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = twitchy)
+# DORMANT BY DEFAULT. With eyes, the arm sits limp and unpowered until a face
+# has been there continuously for WAKE_AFTER_S, and returns to limp after
+# SLEEP_AFTER_S with nobody in sight. An unloaded arm draws almost nothing,
+# makes no noise and generates no heat, which matters across a whole evening
+# and keeps the servos out of the supply's way until there is a reason.
+# The wake delay is a debounce: a single false face should not raise the dead.
+WAKE_AFTER_S = 2.0      # continuous seconds of face before the servos power up
+SLEEP_AFTER_S = 10.0    # consecutive seconds without one before they let go
+WAKE_MS = 2200          # how gently it rises from rest (it has been hanging limp)
 TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
 # TRACKING IS THE POINT, and pointing at where the victim truly stands does
 # not deliver it. That angle is honest but useless at both ends: with the
@@ -458,16 +471,28 @@ def main() -> None:
         print(f"eyes: BASE_SIGN flipped to {BASE_SIGN:+.0f} for this run")
     eyes = Eyes(a.video_src, a.detector, show=a.show) if a.eyes else None
     arm = DryBackend() if a.dry else Backend(a.usb)
-    print("assuming the pose...")
     base = (SWEEP_LO_DEG + SWEEP_HI_DEG) / 2
-    arm.send({**POSE_POINT_DEG, 6: base}, 2500)
-    time.sleep(2.7)
-    print("hunting" + (f" with eyes open ({eyes.kind})" if eyes else "") + ". Ctrl-C to release the victim.")
+
+    # Without eyes there is nothing to wait for, so the blind hunt starts
+    # immediately and never sleeps. With eyes, the arm begins dead.
+    awake = eyes is None
+    if awake:
+        print("assuming the pose...")
+        arm.send({**POSE_POINT_DEG, 6: base}, 2500)
+        time.sleep(2.7)
+        print("hunting. Ctrl-C to release the victim.")
+    else:
+        arm.send({**POSE_REST_DEG, 6: base}, 2500)
+        time.sleep(2.7)
+        arm.relax()
+        print(f"dormant, servos off ({eyes.kind}). It wakes on a face held for "
+              f"{WAKE_AFTER_S:.0f}s. Ctrl-C to quit.")
 
     t0 = time.monotonic()
     heading_offset = 0.0  # phase shift accumulated by snaps
     frozen_until = 0.0
     last_seen = -1e9      # when the eyes last saw someone
+    seen_since = None     # when the CURRENT unbroken run of sightings began
     locked = False
     last_report = -1e9    # when we last showed the tracking on stdout
     prev_base = base      # where the base was before the latest tracked update
@@ -483,6 +508,36 @@ def main() -> None:
                     print("video ended")
                     break
                 seen = eyes.look(first=not locked)
+
+                # --- dormant: watch, and nothing else --------------------- #
+                if seen is None:
+                    seen_since = None
+                elif seen_since is None:
+                    seen_since = now
+                if not awake:
+                    held = 0.0 if seen_since is None else now - seen_since
+                    if held < WAKE_AFTER_S:
+                        time.sleep(TICK)
+                        continue
+                    base = clamp_deg(6, seen[0])
+                    print(f"\nsomething is there. {held:.1f}s of face — waking up.")
+                    arm.send({**POSE_POINT_DEG, 6: base}, WAKE_MS)
+                    time.sleep(WAKE_MS / 1000 + 0.2)
+                    awake, locked = True, True
+                    last_seen, prev_base, last_report = now, base, now
+                    coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
+                    frozen_until = 0.0
+                    continue
+
+                # --- awake: nobody for long enough? go back to sleep ------- #
+                if now - last_seen > SLEEP_AFTER_S:
+                    print(f"\nnobody for {SLEEP_AFTER_S:.0f}s — going back to sleep.")
+                    arm.send(POSE_REST_DEG, 2500)
+                    time.sleep(2.7)
+                    arm.relax()
+                    awake, locked, coil = False, False, "out"
+                    continue
+
                 if seen is not None:
                     base, t = seen
                     base = clamp_deg(6, base)

@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Face tracking is working on the Windows machine. It was trailing a second or two behind, mostly because of limits I had put on it to save power, so those are loosened and it should feel immediate now.",
-    "direction": "Watch whether the faster turning brings the overload beep back, and keep hunting that power problem",
+    "status": "The hand plays dead now. It hangs limp with the motors off until someone stands in front of it for a couple of seconds, comes alive and follows them, then goes back to sleep when they leave.",
+    "direction": "Deployment prep — it should idle cold and quiet all evening and only wake for actual visitors",
     "last_update": "2026-09-14T00:00:00Z"
   }
 }
