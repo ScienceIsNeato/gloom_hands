@@ -18,11 +18,12 @@ soft-limited per angles.LIMITS_DEG). Three layers of creep, tunable below:
   3. TWITCH — random freezes ("...did it hear something?") and sudden fast
               snaps to a new heading
 ...and with --eyes a fourth:
-  0. SLACK  — with --eyes the arm spends most of its life parked upright
-              and completely unpowered. It searches for SEARCH_S at startup
-              and after losing anyone; come up empty and it parks and lets
-              go. A face held for WAKE_AFTER_S brings it back. Everything
-              below only happens while it is awake.
+  0. SLACK  — with --eyes the arm spends most of its life with every servo
+              switched off: no current, no holding torque, limp enough to
+              move by hand. It searches for SEARCH_S at startup and after
+              losing anyone; come up empty and it stands upright and cuts
+              the power. A face held for WAKE_AFTER_S brings it back.
+              Everything below only happens while it is awake.
   4. LOCK   — the vision package finds the person in the webcam
               frame and works out their bearing from the BASE PIVOT (the
               camera can sit anywhere: see CAMERA below). The base snaps to
@@ -68,12 +69,11 @@ POSE_POINT_DEG = {
     1: 12.0,   # gripper: half-open, ready to grab
 }
 POSE_REST_DEG = {sid: 0.0 for sid in range(1, 7)}
-# Where it parks before the power comes off. Wants to be STRAIGHT UP and
-# balanced over the base, because an unloaded arm holds nothing: whatever
-# pose it is in when the motors let go is a pose gravity gets to edit. An
-# upright arm barely moves; a reaching one falls. Tune it with ./pose.py and
-# check by releasing it (./relax.py) and seeing how far it sags.
-POSE_SLACK_DEG = {sid: 0.0 for sid in range(1, 7)}
+# Where it stands when the power is cut. Vertical and balanced over the base,
+# measured on the real arm, so that letting go barely moves it. This is a
+# place to STOP, not a pose to hold: a moment after reaching it every servo
+# is switched off and the arm can be pushed around by hand.
+POSE_SLACK_DEG = {5: -5.0, 4: 0.0, 3: 0.0, 2: 0.0, 1: 0.0, 6: 0.0}
 # Drawn back like a snake about to strike: shoulder leaned well back,
 # elbow folded hard, wrist curled. Dialed in on the arm with ./pose.py
 # (which prints this line); re-run it if the arm is reassembled.
@@ -171,7 +171,9 @@ LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = 
 #   start  -> SEARCH for SEARCH_S. A face at any point starts TRACKING.
 #   TRACK  -> follow. Losing the face drops back to SEARCH after LOST_AFTER_S.
 #   SEARCH -> SEARCH_S with nobody seen and it parks upright and goes slack.
-#   SLACK  -> wait. A face held for WAKE_AFTER_S brings it back to TRACK.
+#   SLACK  -> every servo switched OFF. No current, no holding torque, the
+#             arm limp enough to reposition by hand. A face held for
+#             WAKE_AFTER_S powers it back up into TRACK.
 #
 # Every sighting restarts the SEARCH_S clock, so a room with people in it
 # keeps the arm awake and an empty one lets it go within SEARCH_S.
@@ -179,6 +181,9 @@ SEARCH_S = 10.0         # seconds hunting with nobody in sight before it lets go
 WAKE_AFTER_S = 2.0      # continuous face needed to wake it (a debounce; 0 to disable)
 WAKE_MS = 2200          # how gently it rises — it has been hanging slack
 PARK_MS = 2500          # and how gently it goes back down
+SLACK_REASSERT_S = 60.0 # re-send the unload this often while asleep. BLE writes are
+                        # never acknowledged, so this is the cheap insurance against
+                        # the one packet that matters going missing.
 TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
 # TRACKING IS THE POINT, and pointing at where the victim truly stands does
 # not deliver it. That angle is honest but useless at both ends: with the
@@ -236,24 +241,26 @@ class Backend:
         except Exception as err:  # noqa: BLE001 - keep hunting; the next tick retries
             print(f"arm: move skipped ({err})")
 
-    def relax(self) -> None:
-        """Cut the motors. Parking at rest still leaves every servo holding;
-        a cantilevered joint will draw current until it sings."""
+    def relax(self, quiet: bool = False) -> None:
+        """Switch every servo off. Not a pose — no current and no holding
+        torque, so the arm is limp and can be moved by hand."""
         try:
             if self._servo is not None:
                 self._arm.servoOff()
             else:
                 self._arm.unload()
         except Exception as err:  # noqa: BLE001 - we are shutting down anyway
-            print(f"arm: could not unload ({err})")
+            if not quiet:
+                print(f"arm: could not unload ({err})")
 
 
 class DryBackend:
     """No arm: print the base heading (and any elbow/shoulder move) so the
     eyes and the strike can be tested anywhere."""
 
-    def relax(self) -> None:
-        print("  (relax)")
+    def relax(self, quiet: bool = False) -> None:
+        if not quiet:
+            print("  (servos off, limp)")
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
         if {3, 4, 5} & moves_deg.keys():
@@ -506,6 +513,7 @@ def main() -> None:
     locked = False
     last_report = -1e9    # when we last showed the tracking on stdout
     prev_base = base      # where the base was before the latest tracked update
+    last_unload = -1e9    # when the unload was last re-sent while slack
     coil = "out"          # "out" (pointing) / "coiling" / "coiled" — the strike cycle
     coil_at = 0.0         # when the next phase of the strike cycle happens
     try:
@@ -528,6 +536,11 @@ def main() -> None:
                     # --- SLACK: unpowered, just watching --------------------- #
                     held = 0.0 if seen_since is None else now - seen_since
                     if held < WAKE_AFTER_S:
+                        # Nothing is acknowledged on this link, so say it again
+                        # occasionally rather than trust one packet all night.
+                        if now - last_unload >= SLACK_REASSERT_S:
+                            arm.relax(quiet=True)
+                            last_unload = now
                         time.sleep(TICK)
                         continue
                     base = clamp_deg(6, seen[0])
@@ -542,12 +555,13 @@ def main() -> None:
 
                 # --- SEARCH has run out: park upright and let go ------------ #
                 if now - last_seen > SEARCH_S:
-                    print(f"\nnothing for {SEARCH_S:.0f}s — parking and going slack.")
+                    print(f"\nnothing for {SEARCH_S:.0f}s — standing up and cutting power.")
                     arm.send(POSE_SLACK_DEG, PARK_MS)
                     time.sleep(PARK_MS / 1000 + 0.2)
                     arm.relax()
+                    print("servos off. It is limp — you can move it by hand.")
                     awake, locked, coil = False, False, "out"
-                    seen_since = None
+                    seen_since, last_unload = None, now
                     continue
 
                 if seen is not None:

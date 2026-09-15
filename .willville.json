@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Reworked how the hand idles. It looks around for ten seconds, and if nobody is there it parks upright and cuts all power to itself. Any face wakes it and resets the clock, so it only runs when someone is actually in the room.",
-    "direction": "Find the parked pose that lets it hang dead without sagging, then deploy it in the corner",
-    "last_update": "2026-09-14T00:00:00Z"
+    "status": "When nobody is around the hand now stands up straight and switches itself off completely — no power, you can push it around by hand. It tells the arm to let go several times over, since the radio never confirms anything.",
+    "direction": "Leave it running in the corner and see whether it really stays cold and quiet all evening",
+    "last_update": "2026-09-15T00:00:00Z"
   }
 }

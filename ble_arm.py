@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import sys as _sys
 import threading
+import time
 from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
@@ -179,14 +180,20 @@ class BleArm:
             moves = [(moves, float(deg))]  # type: ignore[arg-type]
         self.set_position([(sid, servo_units(sid, d)) for sid, d in moves], duration_ms=duration_ms)
 
-    def unload(self, servo_ids: list[int] | None = None) -> None:
-        """Cut the motors so the joints go limp.
+    def unload(self, servo_ids: list[int] | None = None, repeat: int = 3) -> None:
+        """Cut the motors. The joints go limp and can be moved by hand.
 
-        A servo commanded to hold a cantilevered pose keeps drawing current
-        forever and eventually sings its overload alarm; parking the arm is
-        not the same as relaxing it. Call this when you are done with it.
+        Sent more than once on purpose. These writes are fire-and-forget —
+        the board never acknowledges them — so a single dropped packet would
+        leave the arm holding its pose, drawing current, indefinitely. The
+        command is idempotent, so repeating it costs nothing and removes the
+        one failure that actually matters here.
         """
-        self._write(servo_unload_packet(servo_ids or [1, 2, 3, 4, 5, 6]))
+        packet = servo_unload_packet(servo_ids or [1, 2, 3, 4, 5, 6])
+        for i in range(max(1, repeat)):
+            self._write(packet)
+            if i + 1 < repeat:
+                time.sleep(0.06)
 
     def close(self) -> None:
         if self._client is not None:
