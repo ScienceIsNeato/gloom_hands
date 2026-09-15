@@ -18,10 +18,11 @@ soft-limited per angles.LIMITS_DEG). Three layers of creep, tunable below:
   3. TWITCH — random freezes ("...did it hear something?") and sudden fast
               snaps to a new heading
 ...and with --eyes a fourth:
-  0. SLEEP  — with --eyes the arm starts limp and unpowered and stays that
-              way until a face has been there for WAKE_AFTER_S. It lets go
-              again after SLEEP_AFTER_S with nobody in sight. Everything
-              below only happens in between.
+  0. SLACK  — with --eyes the arm spends most of its life parked upright
+              and completely unpowered. It searches for SEARCH_S at startup
+              and after losing anyone; come up empty and it parks and lets
+              go. A face held for WAKE_AFTER_S brings it back. Everything
+              below only happens while it is awake.
   4. LOCK   — the vision package finds the person in the webcam
               frame and works out their bearing from the BASE PIVOT (the
               camera can sit anywhere: see CAMERA below). The base snaps to
@@ -67,6 +68,12 @@ POSE_POINT_DEG = {
     1: 12.0,   # gripper: half-open, ready to grab
 }
 POSE_REST_DEG = {sid: 0.0 for sid in range(1, 7)}
+# Where it parks before the power comes off. Wants to be STRAIGHT UP and
+# balanced over the base, because an unloaded arm holds nothing: whatever
+# pose it is in when the motors let go is a pose gravity gets to edit. An
+# upright arm barely moves; a reaching one falls. Tune it with ./pose.py and
+# check by releasing it (./relax.py) and seeing how far it sags.
+POSE_SLACK_DEG = {sid: 0.0 for sid in range(1, 7)}
 # Drawn back like a snake about to strike: shoulder leaned well back,
 # elbow folded hard, wrist curled. Dialed in on the arm with ./pose.py
 # (which prints this line); re-run it if the arm is reassembled.
@@ -157,15 +164,21 @@ BASE_SIGN = +1.0
 # throwing away the very samples that carry the movement. YuNet's face boxes
 # are clean enough not to need much of either.
 LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = twitchy)
-# DORMANT BY DEFAULT. With eyes, the arm sits limp and unpowered until a face
-# has been there continuously for WAKE_AFTER_S, and returns to limp after
-# SLEEP_AFTER_S with nobody in sight. An unloaded arm draws almost nothing,
-# makes no noise and generates no heat, which matters across a whole evening
-# and keeps the servos out of the supply's way until there is a reason.
-# The wake delay is a debounce: a single false face should not raise the dead.
-WAKE_AFTER_S = 2.0      # continuous seconds of face before the servos power up
-SLEEP_AFTER_S = 10.0    # consecutive seconds without one before they let go
-WAKE_MS = 2200          # how gently it rises from rest (it has been hanging limp)
+# ASLEEP 99% OF THE TIME. This thing lives in a corner of a house, so the
+# resting state is genuinely off: parked upright and completely unpowered,
+# drawing nothing, silent, cool, and out of the supply's way.
+#
+#   start  -> SEARCH for SEARCH_S. A face at any point starts TRACKING.
+#   TRACK  -> follow. Losing the face drops back to SEARCH after LOST_AFTER_S.
+#   SEARCH -> SEARCH_S with nobody seen and it parks upright and goes slack.
+#   SLACK  -> wait. A face held for WAKE_AFTER_S brings it back to TRACK.
+#
+# Every sighting restarts the SEARCH_S clock, so a room with people in it
+# keeps the arm awake and an empty one lets it go within SEARCH_S.
+SEARCH_S = 10.0         # seconds hunting with nobody in sight before it lets go
+WAKE_AFTER_S = 2.0      # continuous face needed to wake it (a debounce; 0 to disable)
+WAKE_MS = 2200          # how gently it rises — it has been hanging slack
+PARK_MS = 2500          # and how gently it goes back down
 TRACK_COAST_S = 1.5     # a track survives this long unconfirmed, coasting on its last motion
 # TRACKING IS THE POINT, and pointing at where the victim truly stands does
 # not deliver it. That angle is honest but useless at both ends: with the
@@ -473,25 +486,22 @@ def main() -> None:
     arm = DryBackend() if a.dry else Backend(a.usb)
     base = (SWEEP_LO_DEG + SWEEP_HI_DEG) / 2
 
-    # Without eyes there is nothing to wait for, so the blind hunt starts
-    # immediately and never sleeps. With eyes, the arm begins dead.
-    awake = eyes is None
-    if awake:
-        print("assuming the pose...")
-        arm.send({**POSE_POINT_DEG, 6: base}, 2500)
-        time.sleep(2.7)
+    # Always begin by looking: assume the pose and search. With eyes, a fruitless
+    # search times out into slack; without them the blind hunt runs forever.
+    print("assuming the pose...")
+    arm.send({**POSE_POINT_DEG, 6: base}, 2500)
+    time.sleep(2.7)
+    awake = True
+    if eyes is None:
         print("hunting. Ctrl-C to release the victim.")
     else:
-        arm.send({**POSE_REST_DEG, 6: base}, 2500)
-        time.sleep(2.7)
-        arm.relax()
-        print(f"dormant, servos off ({eyes.kind}). It wakes on a face held for "
-              f"{WAKE_AFTER_S:.0f}s. Ctrl-C to quit.")
+        print(f"searching ({eyes.kind}). Nothing within {SEARCH_S:.0f}s and it goes slack. "
+              f"Ctrl-C to quit.")
 
     t0 = time.monotonic()
     heading_offset = 0.0  # phase shift accumulated by snaps
     frozen_until = 0.0
-    last_seen = -1e9      # when the eyes last saw someone
+    last_seen = 0.0       # when the eyes last saw someone; also the SEARCH_S clock
     seen_since = None     # when the CURRENT unbroken run of sightings began
     locked = False
     last_report = -1e9    # when we last showed the tracking on stdout
@@ -515,12 +525,13 @@ def main() -> None:
                 elif seen_since is None:
                     seen_since = now
                 if not awake:
+                    # --- SLACK: unpowered, just watching --------------------- #
                     held = 0.0 if seen_since is None else now - seen_since
                     if held < WAKE_AFTER_S:
                         time.sleep(TICK)
                         continue
                     base = clamp_deg(6, seen[0])
-                    print(f"\nsomething is there. {held:.1f}s of face — waking up.")
+                    print(f"\nsomething is there ({held:.1f}s of face) — waking up.")
                     arm.send({**POSE_POINT_DEG, 6: base}, WAKE_MS)
                     time.sleep(WAKE_MS / 1000 + 0.2)
                     awake, locked = True, True
@@ -529,13 +540,14 @@ def main() -> None:
                     frozen_until = 0.0
                     continue
 
-                # --- awake: nobody for long enough? go back to sleep ------- #
-                if now - last_seen > SLEEP_AFTER_S:
-                    print(f"\nnobody for {SLEEP_AFTER_S:.0f}s — going back to sleep.")
-                    arm.send(POSE_REST_DEG, 2500)
-                    time.sleep(2.7)
+                # --- SEARCH has run out: park upright and let go ------------ #
+                if now - last_seen > SEARCH_S:
+                    print(f"\nnothing for {SEARCH_S:.0f}s — parking and going slack.")
+                    arm.send(POSE_SLACK_DEG, PARK_MS)
+                    time.sleep(PARK_MS / 1000 + 0.2)
                     arm.relax()
                     awake, locked, coil = False, False, "out"
+                    seen_since = None
                     continue
 
                 if seen is not None:
@@ -566,7 +578,7 @@ def main() -> None:
                               f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg")
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
-                    print("lost it... resuming the hunt")
+                    print(f"lost it — searching for {SEARCH_S - (now - last_seen):.0f}s more")
                     locked = False
                     heading_offset = rephase(now, base)
                     if coil != "out":

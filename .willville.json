@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The hand plays dead now. It hangs limp with the motors off until someone stands in front of it for a couple of seconds, comes alive and follows them, then goes back to sleep when they leave.",
-    "direction": "Deployment prep — it should idle cold and quiet all evening and only wake for actual visitors",
+    "status": "Reworked how the hand idles. It looks around for ten seconds, and if nobody is there it parks upright and cuts all power to itself. Any face wakes it and resets the clock, so it only runs when someone is actually in the room.",
+    "direction": "Find the parked pose that lets it hang dead without sagging, then deploy it in the corner",
     "last_update": "2026-09-14T00:00:00Z"
   }
 }

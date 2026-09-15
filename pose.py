@@ -5,6 +5,9 @@ you can paste straight into gloom.py.
 
     ./pose.py            # start from POSE_COIL_DEG
     ./pose.py point      # start from POSE_POINT_DEG
+    ./pose.py slack      # start from POSE_SLACK_DEG — where it parks before
+                         # the power comes off, so it wants to be upright and
+                         # balanced. Release it with ./relax.py to see it sag.
     ./pose.py --usb      # wired
 
       1 / 2   shoulder (servo 5)  - / +
@@ -44,18 +47,20 @@ KEYS = {"1": (5, -1), "2": (5, +1), "4": (4, -1), "5": (4, +1), "7": (3, -1), "8
 args = sys.argv[1:]
 usb = "--usb" in args
 dry = "--dry" in args
-start = "point" if "point" in args else "coil"
+start = next((k for k in ("point", "slack", "coil") if k in args), "coil")
 
-from gloom import POSE_COIL_DEG, POSE_POINT_DEG, Backend, DryBackend  # noqa: E402
+from gloom import POSE_COIL_DEG, POSE_POINT_DEG, POSE_SLACK_DEG, Backend, DryBackend  # noqa: E402
 
-pose = dict(POSE_POINT_DEG if start == "point" else POSE_COIL_DEG)
+POSES = {"point": POSE_POINT_DEG, "slack": POSE_SLACK_DEG, "coil": POSE_COIL_DEG}
+CONST = {"point": "POSE_POINT_DEG", "slack": "POSE_SLACK_DEG", "coil": "POSE_COIL_DEG"}
+pose = dict(POSES[start])
 for sid in (5, 4, 3):
     pose.setdefault(sid, 0.0)
 
 
 def show(step: float) -> None:
     line = ", ".join(f"{sid}: {pose[sid]:.1f}" for sid in (5, 4, 3))
-    print(f"POSE_COIL_DEG = {{{line}}}    (step {step:g} deg)")
+    print(f"{CONST[start]} = {{{line}}}    (step {step:g} deg)")
 
 
 def getch() -> str:
@@ -100,4 +105,4 @@ while True:
         pose[sid] = clamp_deg(sid, pose[sid] + sign * step)
         arm.send({sid: pose[sid]}, MOVE_MS)  # this joint only
         show(step)
-print("done — paste the last POSE_COIL_DEG line into gloom.py")
+print(f"done — paste the last {CONST[start]} line into gloom.py")
