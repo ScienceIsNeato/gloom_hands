@@ -65,11 +65,32 @@ ported from the 2024 HalloweenTracker head; the rest is new.) Describe where it 
 the top of `gloom.py` (metres forward and left of the pivot, and which
 way the lens points), plus its horizontal field of view.
 
+**With `--eyes` the arm is asleep almost all the time.** It is meant to sit
+in a corner doing nothing, so its resting state is genuinely off:
+
+| State | What it does |
+| --- | --- |
+| `SEARCH` | sweeps and writhes, looking. Entered at startup and after losing someone. |
+| `TRACK` | follows the face, with the coil and strike cycle. |
+| `SLACK` | parked upright, **completely unpowered**. Silent, cool, drawing nothing. |
+
+`SEARCH_S` seconds with nobody in sight and it parks and lets go. Every
+sighting restarts that clock, so an occupied room keeps it awake and an
+empty one releases it. From slack, a face held for `WAKE_AFTER_S` brings it
+back; that delay is a debounce, so one spurious detection cannot raise it.
+
+`POSE_SLACK_DEG` is where it parks before the power comes off, and it
+matters more than it looks. An unloaded arm holds nothing, so whatever pose
+it is in when the motors let go is a pose gravity gets to edit: upright and
+balanced barely moves, reaching falls. Tune it with `./pose.py slack`, then
+release with `./relax.py` and watch how far it sags.
+
 ```bash
-./eyes.py                          # just look: preview window, no arm (d switches detector)
-./eyes.py --detector person        # HOG person detector instead of frame differencing
-./gloom.py --eyes                  # hunt, and lock on when someone moves
+./eyes.py                          # just look: preview window, no arm (d cycles detectors, s snapshots)
+./eyes.py --detector background    # or motion (legacy diff), person (HOG); default is face
+./gloom.py --eyes                  # search, track, and go slack in an empty room
 ./gloom.py --eyes --dry --show     # no arm: print the base headings, show what it sees
+./gloom.py --eyes --flip           # try the other BASE_SIGN for one run
 ./gloom.py --eyes --video-src 1    # a different camera, or a video file
 ```
 
