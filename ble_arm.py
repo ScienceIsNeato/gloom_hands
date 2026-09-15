@@ -195,6 +195,24 @@ class BleArm:
             if i + 1 < repeat:
                 time.sleep(0.06)
 
+    def disconnect(self) -> None:
+        """Drop the BLE link but keep the worker loop alive, so the next
+        write can bring it back.
+
+        On this board the servos appear to release when the link goes away,
+        which is what actually makes the arm limp — the CMD_SERVO_STOP
+        unload on its own does not seem to. Disconnecting is therefore the
+        reliable way to take the current off, and reconnecting is cheap
+        because the address is cached.
+        """
+        if self._client is not None:
+            try:
+                self._run(self._client.disconnect())
+            except Exception:  # noqa: BLE001 - already gone is the outcome we want
+                pass
+        self._client = None
+        self._char = None
+
     def close(self) -> None:
         if self._client is not None:
             try:

@@ -228,8 +228,10 @@ class Backend:
 
             self._arm = BleArm()
             self._servo = None
+        self.released = False   # True once the current is off and, on BLE, the link dropped
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
+        self.released = False
         units = {sid: servo_units(sid, d) for sid, d in moves_deg.items()}
         if self._servo is not None:
             self._arm.setPosition(
@@ -241,14 +243,23 @@ class Backend:
         except Exception as err:  # noqa: BLE001 - keep hunting; the next tick retries
             print(f"arm: move skipped ({err})")
 
-    def relax(self, quiet: bool = False) -> None:
-        """Switch every servo off. Not a pose — no current and no holding
-        torque, so the arm is limp and can be moved by hand."""
+    def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
+        """Take the current off every servo, so the arm is limp and can be
+        moved by hand.
+
+        Over Bluetooth this also DROPS THE LINK. The unload command alone
+        was observed not to release this board — the arm only went limp when
+        the process exited and the connection died with it. So the link is
+        what actually does it, and the next command reconnects on its own.
+        """
+        self.released = True
         try:
             if self._servo is not None:
                 self._arm.servoOff()
-            else:
-                self._arm.unload()
+                return
+            self._arm.unload()
+            if drop_link:
+                self._arm.disconnect()
         except Exception as err:  # noqa: BLE001 - we are shutting down anyway
             if not quiet:
                 print(f"arm: could not unload ({err})")
@@ -258,9 +269,12 @@ class DryBackend:
     """No arm: print the base heading (and any elbow/shoulder move) so the
     eyes and the strike can be tested anywhere."""
 
-    def relax(self, quiet: bool = False) -> None:
+    released = False
+
+    def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
+        self.released = True
         if not quiet:
-            print("  (servos off, limp)")
+            print("  (servos off, link dropped, limp)")
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
         if {3, 4, 5} & moves_deg.keys():
@@ -539,7 +553,7 @@ def main() -> None:
                     if held < WAKE_AFTER_S:
                         # Nothing is acknowledged on this link, so say it again
                         # occasionally rather than trust one packet all night.
-                        if now - last_unload >= SLACK_REASSERT_S:
+                        if not arm.released and now - last_unload >= SLACK_REASSERT_S:
                             arm.relax(quiet=True)
                             last_unload = now
                         # Say out loud that it is still asleep, and show a face
@@ -572,8 +586,8 @@ def main() -> None:
                     arm.send(POSE_SLACK_DEG, PARK_MS)
                     time.sleep(PARK_MS / 1000 + 0.2)
                     arm.relax()
-                    print("servos off — no current, no holding torque. Push it around "
-                          "by hand if you like.")
+                    print("servos off, Bluetooth link dropped — no current, no holding "
+                          "torque. Push it around by hand.")
                     print("  (it will wake again the moment it sees a face for "
                           f"{WAKE_AFTER_S:.0f}s, including yours)")
                     awake, locked, coil = False, False, "out"

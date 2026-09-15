@@ -84,9 +84,14 @@ before the power is cut, chosen so that letting go barely moves it: vertical
 and balanced over the base. Anything reaching would fall. Tune it with
 `./pose.py slack`, then run `./relax.py` and see how far it actually sags.
 
-The unload is sent several times, and again every `SLACK_REASSERT_S` while
-asleep. Bluetooth writes here are never acknowledged, so one dropped packet
-would otherwise leave the arm holding a pose, drawing current, all night.
+**Over Bluetooth, going slack means dropping the link.** The documented
+unload command, `CMD_SERVO_STOP`, appears to do nothing on this board: the
+arm only ever went limp when the process exited and the connection died
+with it. So sleeping sends the unload and then disconnects, and the next
+command reconnects on its own from the cached address. `./relax.py --stay`
+is the experiment that tells the two apart — it unloads but holds the link
+open, so you can push the arm and see which mechanism is really releasing
+it.
 
 **Testing whether it is really limp is harder than it sounds**, because
 walking up to check puts your face in front of the camera and wakes it
