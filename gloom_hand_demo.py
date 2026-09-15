@@ -20,8 +20,13 @@ Angles are centered degrees: 0.0 = servo midpoint, ±120 span.
 # activation — and without hardcoding any machine-specific path.
 import os as _os, sys as _sys
 _venv_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".venv")
-_venv_py = _os.path.join(_venv_dir, "bin", "python")
+_venv_py = _os.path.join(_venv_dir, *(("Scripts", "python.exe") if _os.name == "nt" else ("bin", "python")))
 if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspath(_venv_dir):
+    if _os.name == "nt":
+        # execv on Windows detaches from the console (the prompt returns while
+        # output keeps coming), so spawn and pass the exit code through.
+        import subprocess as _sp
+        _sys.exit(_sp.call([_venv_py] + _sys.argv))
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import asyncio
 import math

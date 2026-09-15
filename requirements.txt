@@ -1,0 +1,19 @@
+# Everything the gloom hand needs. Install into the project venv:
+#   Windows:  py -m venv .venv && .venv\Scripts\python -m pip install -r requirements.txt
+#   macOS:    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# Every one of these ships a Python 3.14 wheel for Windows; nothing compiles.
+
+# --- the arm ---------------------------------------------------------- #
+bleak>=1.0            # Bluetooth LE transport (WinRT on Windows, CoreBluetooth on macOS)
+pyserial
+
+# --- the eyes (--eyes) ------------------------------------------------ #
+numpy
+opencv-python>=4.5,<5  # 4.x on purpose: the 5.0 wheels dropped FaceDetectorYN and the Haar cascades
+
+# --- wired (USB) control: probe.py, move.py, teleop.py --usb ---------- #
+xarm
+hidapi
+
+# --- teleop.py's curses UI is stdlib everywhere except Windows -------- #
+windows-curses; sys_platform == 'win32'

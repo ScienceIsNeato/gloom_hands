@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The robot arm obeys the laptop now, wired or wireless, and has its first personality: a Zelda gloom hand that sweeps around looking for victims",
-    "direction": "Tune the hunting pose on the real hardware, then give it eyes — a webcam so it locks onto people it finds",
-    "last_update": "2026-09-05T07:18:51Z"
+    "status": "When nobody is around the hand now stands up straight and switches itself off completely — no power, you can push it around by hand. It tells the arm to let go several times over, since the radio never confirms anything.",
+    "direction": "Leave it running in the corner and see whether it really stays cold and quiet all evening",
+    "last_update": "2026-09-15T00:00:00Z"
   }
 }
