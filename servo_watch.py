@@ -321,6 +321,9 @@ class Watch:
 def main() -> None:
     p = argparse.ArgumentParser(description="wired servo load diagnostic")
     p.add_argument("--relax", action="store_true", help="unload every servo and exit (the panic button)")
+    p.add_argument("--verify-relax", action="store_true",
+                   help="unload, then watch the joints while you push the arm — proves whether "
+                        "it is really limp instead of guessing from how it feels")
     p.add_argument("--hold", choices=sorted(POSES), help="hold this pose and watch it")
     p.add_argument("--strike", action="store_true", help="one coil -> lurch -> hold")
     p.add_argument("--soak", type=float, metavar="SECONDS",
@@ -343,6 +346,43 @@ def main() -> None:
     if a.relax:
         w.relax()
         print("all servos unloaded — the arm is limp. No need to pull the power.")
+        return
+
+    if a.verify_relax:
+        # Whether the arm "feels" stiff is not evidence: these gear trains have
+        # real backdrive friction even with no current in them. A servo that is
+        # HOLDING, though, will drag itself back to where it was told to be.
+        w.relax()
+        time.sleep(0.5)
+        rest = w.read()
+        print("unloaded.\n\nNow PUSH THE ARM AROUND by hand for 12 seconds.\n")
+        moved: dict[int, float] = {}
+        returned: dict[int, float] = {}
+        end = time.monotonic() + 12.0
+        while time.monotonic() < end:
+            live = w.read()
+            for sid, deg in live.items():
+                moved[sid] = max(moved.get(sid, 0.0), abs(deg - rest[sid]))
+            print("   " + "  ".join(f"{sid}:{live[sid] - rest[sid]:+6.1f}" for sid in JOINTS), end="\r")
+            time.sleep(0.15)
+        print("\n")
+        settled = w.read()
+        for sid in JOINTS:
+            returned[sid] = abs(settled[sid] - rest[sid])
+        budged = [sid for sid in JOINTS if moved.get(sid, 0) > 4.0]
+        if not budged:
+            print("NOTHING MOVED. Either you did not push it, or the servos still have")
+            print("current in them and the unload is not reaching the board.")
+        else:
+            names = ", ".join(f"{sid} ({NAMES[sid]})" for sid in budged)
+            print(f"moved by hand: {names}")
+            sprung = [sid for sid in budged if returned[sid] < moved[sid] * 0.25]
+            if sprung:
+                print(f"but {', '.join(str(s) for s in sprung)} SPRANG BACK to where it started"
+                      f" — those are still powered and holding.")
+            else:
+                print("and they stayed where you put them. That is genuinely unloaded.")
+        w.relax()
         return
 
     ok = True

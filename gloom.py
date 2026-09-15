@@ -514,6 +514,7 @@ def main() -> None:
     last_report = -1e9    # when we last showed the tracking on stdout
     prev_base = base      # where the base was before the latest tracked update
     last_unload = -1e9    # when the unload was last re-sent while slack
+    slept_at = 0.0        # when it last went slack, for the heartbeat
     coil = "out"          # "out" (pointing) / "coiling" / "coiled" — the strike cycle
     coil_at = 0.0         # when the next phase of the strike cycle happens
     try:
@@ -541,10 +542,22 @@ def main() -> None:
                         if now - last_unload >= SLACK_REASSERT_S:
                             arm.relax(quiet=True)
                             last_unload = now
+                        # Say out loud that it is still asleep, and show a face
+                        # being held — otherwise "why did it stiffen again?" has
+                        # no answer on screen, and the answer is usually that
+                        # whoever went to test it was standing in front of it.
+                        if held > 0:
+                            print(f"  asleep — face held {held:.1f}s of {WAKE_AFTER_S:.1f}s "
+                                  f"needed to wake", end="\r", flush=True)
+                            last_report = now
+                        elif now - last_report >= 15.0:
+                            print(f"  asleep {now - slept_at:.0f}s, servos off, nobody in sight")
+                            last_report = now
                         time.sleep(TICK)
                         continue
                     base = clamp_deg(6, seen[0])
-                    print(f"\nsomething is there ({held:.1f}s of face) — waking up.")
+                    print(f"\nsomething is there ({held:.1f}s of face) — waking up, "
+                          f"servos back on.")
                     arm.send({**POSE_POINT_DEG, 6: base}, WAKE_MS)
                     time.sleep(WAKE_MS / 1000 + 0.2)
                     awake, locked = True, True
@@ -559,9 +572,12 @@ def main() -> None:
                     arm.send(POSE_SLACK_DEG, PARK_MS)
                     time.sleep(PARK_MS / 1000 + 0.2)
                     arm.relax()
-                    print("servos off. It is limp — you can move it by hand.")
+                    print("servos off — no current, no holding torque. Push it around "
+                          "by hand if you like.")
+                    print("  (it will wake again the moment it sees a face for "
+                          f"{WAKE_AFTER_S:.0f}s, including yours)")
                     awake, locked, coil = False, False, "out"
-                    seen_since, last_unload = None, now
+                    seen_since, last_unload, slept_at, last_report = None, now, now, now
                     continue
 
                 if seen is not None:

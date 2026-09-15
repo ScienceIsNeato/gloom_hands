@@ -88,6 +88,14 @@ The unload is sent several times, and again every `SLACK_REASSERT_S` while
 asleep. Bluetooth writes here are never acknowledged, so one dropped packet
 would otherwise leave the arm holding a pose, drawing current, all night.
 
+**Testing whether it is really limp is harder than it sounds**, because
+walking up to check puts your face in front of the camera and wakes it
+within `WAKE_AFTER_S`. The terminal says so while it counts up. For an
+answer that does not depend on feel, plug in the USB cable and run
+`./servo_watch.py --verify-relax`: it unloads, then reads the joint angles
+while you push the arm about. A joint that stays where you put it is
+genuinely off; one that springs back is still powered.
+
 ```bash
 ./eyes.py                          # just look: preview window, no arm (d cycles detectors, s snapshots)
 ./eyes.py --detector background    # or motion (legacy diff), person (HOG); default is face
