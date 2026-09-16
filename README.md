@@ -167,6 +167,13 @@ comes up empty, provided the blob is person-sized. Precision about where
 someone's face is matters less than noticing they are there at all; once
 a track exists, a face reasserts itself the moment one is visible.
 
+That fallback is deliberately fussy, because it started out too eager. A
+webcam adjusting its exposure makes the *whole frame* differ from the
+learned background, which arrives as one enormous blob and reads as a
+person standing very close. So a blob must be tall rather than wide, a
+quarter of the frame but not all of it, and still in the same place four
+frames later before it counts.
+
 Set `hfov_deg` in `CAMERA` from the webcam's spec sheet, or pass `--hfov`.
 Wide-angle webcams are commonly 90 to 120 degrees. Getting it wrong does
 not break tracking, because the frame is mapped onto the sweep either way,
