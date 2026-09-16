@@ -87,7 +87,20 @@ py gloom.py --eyes --usb
 both build over minutes, and nothing else in the loop would ever choose to
 stop while people keep arriving.
 
-**Motion smoothness is a cadence problem.** Commands go out every `TICK`,
+**Smoothness is about the move DURATION, more than the rate.** Each packet
+tells a servo where to go *and how long to take*. If that duration is
+shorter than the gap to the next packet, the servo arrives early and then
+sits perfectly still until the next one lands: move, stop, move, stop, which
+is what a tremor looks like and why the board's light blinks once per
+twitch. The duration is therefore measured from how fast packets actually
+*leave* — not how often the loop offers one, since a packet superseded
+before it went out never reached the arm — and carries 1.6x margin, so the
+servo is always still travelling when the next target arrives. A joint whose
+target has not moved is left out of the packet entirely: re-commanding a
+loaded shoulder several times a second only makes it hunt, and every joint
+costs bytes on the link that is already the bottleneck.
+
+**Cadence matters too.** Commands go out every `TICK`,
 and two things used to steal from that budget. Bluetooth writes were waited
 on, so the loop period became the tick *plus* the write — on a slow link
 that is 2.9 commands a second where 4.5 was intended. And the loop slept a

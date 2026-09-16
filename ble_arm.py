@@ -79,6 +79,8 @@ class BleArm:
         self._writing = False                # a drain task is running
         self.write_errors = 0
         self.writes_done = 0
+        self._last_write = None
+        self.write_interval_ms = 0.0   # measured spacing of packets ACTUALLY leaving
         self._run(self._connect(name_hints, timeout))
 
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
@@ -208,6 +210,17 @@ class BleArm:
                         raise ConnectionError("not connected")
                     await self._client.write_gatt_char(self._char, packet, response=False)
                     self.writes_done += 1
+                    # How fast this link really is. The loop's own cadence says
+                    # nothing about it: a packet superseded before it went out
+                    # never reached the arm, and the move duration has to
+                    # outlast the gap between the ones that did.
+                    t = time.monotonic()
+                    if self._last_write is not None:
+                        gap = (t - self._last_write) * 1000.0
+                        if gap < 2000:
+                            self.write_interval_ms = (gap if not self.write_interval_ms
+                                                      else 0.7 * self.write_interval_ms + 0.3 * gap)
+                    self._last_write = t
                 except Exception:  # noqa: BLE001 - the sync side reconnects; do not stall here
                     self.write_errors += 1
                     self._pending = None

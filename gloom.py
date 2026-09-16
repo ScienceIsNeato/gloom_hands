@@ -60,7 +60,7 @@ import sys
 import threading
 import time
 
-from angles import clamp_deg, servo_units
+from angles import clamp_deg, servo_units, units_to_deg
 
 # ---- the posture (TUNE THESE FIRST, in degrees) ---------------------- #
 POSE_POINT_DEG = {
@@ -264,9 +264,54 @@ class Backend:
             self._servo = None
         self.released = False   # True once the current is off and, on BLE, the link dropped
         self._last_errors = 0   # write-error count at the previous health check
+        self._last_send = None  # when the previous packet went out
+        self.interval_ms = TICK * 1000.0  # measured spacing between packets
+        self._sent_units: dict[int, int] = {}  # last value actually commanded per servo
 
-    def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
+    def stream(self, moves_deg: dict[int, float]) -> None:
+        """Send a posture as part of the continuous stream.
+
+        Two things keep this smooth, and the loop cannot know either of them.
+
+        The MOVE DURATION has to outlast the gap to the next packet. A servo
+        told to travel over 300 ms, when the next command is 440 ms away,
+        arrives early and then sits perfectly still for 140 ms. Move, stop,
+        move, stop — which is exactly what a tremor looks like, and why the
+        board's light blinks once per twitch. So the duration is measured
+        from the real spacing, with margin, and the servo is still moving
+        when the next target lands.
+
+        And a joint whose target has not MOVED is left out. Re-commanding a
+        shoulder that is holding a load, several times a second, makes it
+        hunt around its setpoint for no reason, and every servo in the packet
+        costs bytes on a link that is already the limiting factor.
+        """
+        now = time.monotonic()
+        if self._last_send is not None:
+            gap = (now - self._last_send) * 1000.0
+            if gap < 2000:  # ignore the pause either side of a sleep
+                self.interval_ms = 0.7 * self.interval_ms + 0.3 * gap
+        self._last_send = now
+        # Whichever is slower: how often the loop offers a packet, or how
+        # often the link actually delivers one. A packet superseded before it
+        # went out never reached the arm, so the loop's cadence alone would
+        # understate the real gap and we would be back to arriving early.
+        link = getattr(self._arm, "write_interval_ms", 0.0) if self._servo is None else 0.0
+        # 1.6x: comfortably past the next packet even when the link stutters
+        dur = int(max(TICK * 1000.0, self.interval_ms * 1.6, link * 1.6))
+
+        units = {sid: servo_units(sid, d) for sid, d in moves_deg.items()}
+        fresh = {sid: u for sid, u in units.items()
+                 if abs(u - self._sent_units.get(sid, -9999)) >= 2}
+        if not fresh:
+            return
+        self._sent_units.update(fresh)
+        self.send({sid: units_to_deg(u) for sid, u in fresh.items()}, dur, _measured=True)
+
+    def send(self, moves_deg: dict[int, float], dur_ms: int, _measured: bool = False) -> None:
         self.released = False
+        if not _measured:
+            self._sent_units.clear()  # a one-off move invalidates what we think it holds
         units = {sid: servo_units(sid, d) for sid, d in moves_deg.items()}
         if self._servo is not None:
             self._arm.setPosition(
@@ -338,6 +383,7 @@ class Backend:
         what actually does it, and the next command reconnects on its own.
         """
         self.released = True
+        self._sent_units.clear()
         try:
             if self._servo is not None:
                 self._arm.servoOff()
@@ -355,6 +401,10 @@ class DryBackend:
     the sleep cycle can all be exercised anywhere."""
 
     released = False
+    interval_ms = TICK * 1000.0
+
+    def stream(self, moves_deg: dict[int, float]) -> None:
+        self.send(moves_deg, int(TICK * 1000))
 
     def voltage(self) -> float | None:
         return None
@@ -895,7 +945,8 @@ def main() -> None:
                           state=("slack" if not awake else ("track" if locked else "search")),
                           coil=coil, base=base, volts=(volts if volts is not None else "?"),
                           awake_for=(now - awake_since if awake else 0.0),
-                          look_ms=slow_look, send_ms=slow_send, late=late)
+                          look_ms=slow_look, send_ms=slow_send, late=late,
+                          gap_ms=arm.interval_ms)
                 slow_look = slow_send = 0.0
                 late = 0
 
@@ -1055,7 +1106,7 @@ def main() -> None:
             if time.monotonic() - t0 > tick_due:
                 late += 1  # the work overran its slot; the cadence is slipping
             t_send = time.monotonic()
-            arm.send(body_pose(now, base, home, nod, amp), int(TICK * 1000) + 80)
+            arm.stream(body_pose(now, base, home, nod, amp))
             send_ms = (time.monotonic() - t_send) * 1000
             slow_send = max(slow_send, send_ms)
             pace(tick_due)
