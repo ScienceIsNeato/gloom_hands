@@ -56,7 +56,17 @@ class Tracker:
         secondary=None,
         coast_s: float = 2.5,
         acquire_on_secondary: bool = True,
-        min_secondary_frac: float = 0.12,
+        # What the blob detector must look like before it is allowed to open a
+        # track. Letting it in on size alone was a mistake: a webcam adjusting
+        # its exposure makes the WHOLE FRAME differ from the learned
+        # background, which arrives as one enormous blob and gets treated as a
+        # person standing very close. So: tall, not too tall, not too wide, and
+        # still there several frames later.
+        min_secondary_frac: float = 0.25,   # of frame height — smaller is not a person
+        max_secondary_frac: float = 0.92,   # of frame height — bigger is the whole picture
+        max_secondary_width: float = 0.45,  # of frame width — people are not that wide
+        secondary_aspect: float = 1.3,      # at least this much taller than wide
+        secondary_confirm: int = 4,         # consecutive frames agreeing before it counts
         gate_frac: float = 0.2,
         size_alpha: float = 0.3,
         pos_alpha: float = 0.75,   # how much of each new reading to take; higher = less lag
@@ -68,6 +78,12 @@ class Tracker:
         self.coast_s = coast_s
         self.acquire_on_secondary = acquire_on_secondary
         self.min_secondary_frac = min_secondary_frac
+        self.max_secondary_frac = max_secondary_frac
+        self.max_secondary_width = max_secondary_width
+        self.secondary_aspect = secondary_aspect
+        self.secondary_confirm = secondary_confirm
+        self._cand = 0
+        self._cand_x = None
         self.gate_frac = gate_frac
         self.size_alpha = size_alpha
         self.pos_alpha = pos_alpha
@@ -109,6 +125,7 @@ class Tracker:
             self.secondary.reset()
         self._track = None
         self._far_hits = 0
+        self._cand, self._cand_x = 0, None
         self._last_t = None
 
     # -- the work --------------------------------------------------------- #
@@ -122,6 +139,23 @@ class Tracker:
         # never extrapolated when unconfirmed.
         t = self._track
         return t.x if t is None else t.x + t.vx * min(dt, 0.5)
+
+    def person_shaped(self, d: Detection) -> bool:
+        """Could this blob be a person standing there?
+
+        Rejects the two things that are not: a smear too small to be anybody,
+        and the frame-filling flash that an exposure change produces. Between
+        those, people are taller than they are wide.
+        """
+        if not d.frame_h or not d.frame_w:
+            return False
+        tall = d.height_px / d.frame_h
+        wide = (d.width_px or 0.0) / d.frame_w
+        if not self.min_secondary_frac <= tall <= self.max_secondary_frac:
+            return False
+        if wide > self.max_secondary_width:
+            return False
+        return not d.width_px or d.height_px >= self.secondary_aspect * d.width_px
 
     def _rescale(self, d: Detection) -> Detection:
         """A secondary detection expressed in the primary's pixel frame, since
@@ -180,10 +214,19 @@ class Tracker:
             # were to look at.
             if self.secondary is not None and self.acquire_on_secondary:
                 s = self.secondary.detect(frame_bgr)
-                if s is not None and s.frame_h and s.height_px >= self.min_secondary_frac * s.frame_h:
-                    self._start(self._rescale(s), now)
-                    self.last_source = "secondary"
-                    return self._report(now)
+                if s is not None and self.person_shaped(s):
+                    # and it has to still be there, in the same place, a few
+                    # frames later. One frame of anything is not a person.
+                    near = self._cand_x is not None and abs(s.x - self._cand_x) <= 0.2 * s.frame_w
+                    self._cand = self._cand + 1 if near else 1
+                    self._cand_x = s.x
+                    if self._cand >= self.secondary_confirm:
+                        self._cand, self._cand_x = 0, None
+                        self._start(self._rescale(s), now)
+                        self.last_source = "secondary"
+                        return self._report(now)
+                else:
+                    self._cand, self._cand_x = 0, None
             self.last_source = ""
             return None
 

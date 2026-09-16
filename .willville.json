@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Going after the beeping properly rather than patching around it. The hand now keeps a black box of everything it does, takes a mandatory break every few minutes, and on a cable can watch its own power and back off before it trips.",
-    "direction": "Run it wired for a few hours and read the log after it next trips, which should finally say what it was doing at the time",
+    "status": "Stopped the hand lunging quite so far, which is the moment it always trips its alarm. Also taught it to notice when it has gone deaf, and stopped it mistaking the whole room for a person when the camera changes exposure.",
+    "direction": "See whether the shorter lunge stops the beeping; if not, shorten it again — it is one number now",
     "last_update": "2026-09-16T00:00:00Z"
   }
 }

@@ -131,6 +131,13 @@ LURCH_MS = 500               # how fast it comes out at you (small = violent; be
 # The WRIST carries only the hand, so it can snap for free and still reads as
 # the lunge landing. Put it back on servo 5 if you want the old violence and
 # have the power budget for it.
+# HOW FAR THE STRIKE REACHES, as a fraction of the way from the coil to the
+# full point pose. The alarm has always fired at the END of a lurch, which is
+# the instant the arm arrives at its longest and has to hold there: maximum
+# moment at the shoulder, right after a fast move. Landing short of full
+# extension cuts that holding torque and is the one dial that acts on exactly
+# the moment that fails. 1.0 is the old behaviour.
+LURCH_REACH = 0.90
 LURCH_OVERSHOOT_JOINT = 3    # 3 = wrist (cheap), 5 = shoulder (what used to sing)
 LURCH_OVERSHOOT_DEG = 14.0   # past the point pose as the lunge lands...
 SETTLE_MS = 450              # ...then settles back over this long
@@ -206,6 +213,7 @@ COOLDOWN_S = 90.0       # enforced slack afterwards, faces or no faces
 # stay under it and go slack before the servos raise the alarm themselves.
 BROWNOUT_V = 7.0
 VOLTS_EVERY_S = 1.0     # how often to ask (each read is a USB round trip)
+UNREACHABLE_S = 8.0     # unresponsive this long and we call it: the servos have latched
 PARK_MS = 2500          # and how gently it goes back down
 SLACK_REASSERT_S = 60.0 # re-send the unload this often while asleep. BLE writes are
                         # never acknowledged, so this is the cheap insurance against
@@ -255,6 +263,7 @@ class Backend:
             self._arm = BleArm()
             self._servo = None
         self.released = False   # True once the current is off and, on BLE, the link dropped
+        self._last_errors = 0   # write-error count at the previous health check
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
         self.released = False
@@ -281,6 +290,25 @@ class Backend:
             return self._arm.getBatteryVoltage()
         except Exception:  # noqa: BLE001 - a dropped read is not an emergency
             return None
+
+    def health(self) -> tuple[bool, str]:
+        """Is the arm still listening? Returns (ok, why not).
+
+        When a servo raises its alarm it latches, stops obeying, and takes the
+        board's radio down with it — and nothing in a stream of write-only
+        position commands notices. Wired, a silent controller is the tell.
+        Wireless, it is a link that will not come back and writes that keep
+        failing.
+        """
+        if self._servo is not None:
+            return (self.voltage() is not None), "no reply from the controller"
+        errors = getattr(self._arm, "write_errors", 0)
+        growing, self._last_errors = errors > self._last_errors, errors
+        if not self._arm.connected:
+            return False, "Bluetooth link down and not coming back"
+        if growing:
+            return False, "writes are failing"
+        return True, ""
 
     def prewarm(self) -> None:
         """Start reconnecting in the background.
@@ -330,6 +358,9 @@ class DryBackend:
 
     def voltage(self) -> float | None:
         return None
+
+    def health(self) -> tuple[bool, str]:
+        return True, ""
 
     def prewarm(self) -> None:
         pass
@@ -652,10 +683,20 @@ def body_pose(now: float, base: float, home: dict[int, float],
     }
 
 
+def reach_pose(frac: float = LURCH_REACH) -> dict[int, float]:
+    """How far out the arm actually extends: `frac` of the way from the coil
+    to the full point pose. This is what it lands in and then HOLDS, so it
+    sets the standing torque on the shoulder, not just the look of the lunge."""
+    return {
+        sid: clamp_deg(sid, POSE_COIL_DEG[sid] + frac * (POSE_POINT_DEG[sid] - POSE_COIL_DEG[sid]))
+        for sid in (5, 4, 3)
+    }
+
+
 def lurch_pose() -> dict[int, float]:
-    """The pose the strike lands in: the point pose, with one joint driven
-    past it so the lunge arrives with a snap instead of a glide."""
-    pose = {sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}
+    """Where the strike lands: the reach pose, with one joint driven past it
+    so the lunge arrives with a snap instead of a glide."""
+    pose = reach_pose()
     sid = LURCH_OVERSHOOT_JOINT
     pose[sid] = clamp_deg(sid, pose[sid] + LURCH_OVERSHOOT_DEG)
     return pose
@@ -725,7 +766,7 @@ def main() -> None:
     # Always begin by looking: assume the pose and search. With eyes, a fruitless
     # search times out into slack; without them the blind hunt runs forever.
     print("assuming the pose...")
-    arm.send({**POSE_POINT_DEG, 6: base}, 2500)
+    arm.send({**POSE_POINT_DEG, **reach_pose(), 6: base}, 2500)
     time.sleep(2.7)
     awake = True
     keys = Keys()
@@ -763,6 +804,9 @@ def main() -> None:
     slow_look = 0.0       # worst camera+detect time since the last log line, ms
     slow_send = 0.0       # worst time spent handing a packet to the arm, ms
     late = 0              # ticks that overran their slot
+    health_at = -1e9      # when the arm was last asked whether it is alive
+    unwell_since = None   # when it stopped answering
+    declared_dead = False # so the diagnosis is printed once, not every tick
 
     def pace(due: float) -> None:
         """Sleep until the tick is actually due.
@@ -817,6 +861,33 @@ def main() -> None:
                     elif low_since is not None:
                         log.event(now, "recovered", volts=v, low_for=now - low_since)
                         low_since = None
+
+            # IS THE ARM STILL THERE? A latched alarm stops the servos obeying
+            # and takes the radio with it, and a stream of write-only position
+            # commands sails on regardless, which is why this could run for
+            # hours against an arm that had been dead since the first lurch.
+            if now - health_at >= 2.0:
+                health_at = now
+                ok, why = arm.health()
+                if ok:
+                    if unwell_since is not None:
+                        print(f"\narm responding again after {now - unwell_since:.0f}s.")
+                        log.event(now, "arm_back", down_for=now - unwell_since)
+                        unwell_since = None
+                elif unwell_since is None:
+                    unwell_since = now
+                    log.event(now, "arm_quiet", why=why, coil=coil,
+                              volts=(volts if volts else "?"))
+                elif now - unwell_since > UNREACHABLE_S and not declared_dead:
+                    declared_dead = True
+                    print(f"\n!! THE ARM HAS STOPPED RESPONDING ({why}), {now - unwell_since:.0f}s now.")
+                    print("   This is what the alarm looks like from here: the servos latch,")
+                    print("   stop obeying, and drop the radio. Software cannot clear it —")
+                    print("   the supply has to be cycled. Still watching, in case it returns.")
+                    log.event(now, "arm_dead", why=why, since=unwell_since,
+                              last_coil=coil, volts=(volts if volts else "?"))
+                if ok:
+                    declared_dead = False
 
             if now - last_sample >= 5.0:
                 last_sample = now
@@ -934,7 +1005,7 @@ def main() -> None:
                     locked = False
                     heading_offset = rephase(now, base)
                     if coil != "out":
-                        anim.to({sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}, 1500, now)
+                        anim.to(reach_pose(), 1500, now)
                         coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
 
             # FREEZE: it goes utterly still — but never stops watching you.
@@ -974,7 +1045,7 @@ def main() -> None:
                     coil, coil_at = "settling", now + LURCH_MS / 1000
                 else:
                     sid = LURCH_OVERSHOOT_JOINT
-                    anim.to({sid: POSE_POINT_DEG[sid]}, SETTLE_MS, now)
+                    anim.to({sid: reach_pose()[sid]}, SETTLE_MS, now)
                     coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
 
             # ONE packet per tick, carrying everything at once: the animated
