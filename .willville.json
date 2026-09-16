@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Stopped the hand lunging quite so far, which is the moment it always trips its alarm. Also taught it to notice when it has gone deaf, and stopped it mistaking the whole room for a person when the camera changes exposure.",
-    "direction": "See whether the shorter lunge stops the beeping; if not, shorten it again — it is one number now",
+    "status": "The hand still twitches once per message sent to it, and it is worse over the cable, which rules out everything I had been blaming. Built a test that sweeps one joint at five different speeds so we can just watch which one is smooth.",
+    "direction": "Run that test and see whether a single long move is smooth — if it is, the fix is to stop chattering at the arm and send it waypoints instead",
     "last_update": "2026-09-16T00:00:00Z"
   }
 }

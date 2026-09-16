@@ -319,6 +319,9 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `test_geometry.py` — hand-computed checks for the camera-offset trig; no hardware needed
 - `test_motion.py` — writhe budgets: is each oscillator slow enough to render, and to afford?
 - `test_backends.py` — the real and dry backends must keep the same surface
+- `smoothtest.py` — why is the motion jerky? Sweeps one joint at several
+  command rates, and at two packet sizes, so the cause can be watched rather
+  than argued about. Bypasses the hunt's streaming entirely.
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless
