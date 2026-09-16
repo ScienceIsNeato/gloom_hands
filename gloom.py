@@ -53,6 +53,7 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
         _sys.exit(_sp.call([_venv_py] + _sys.argv))
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import argparse
+import datetime as _dt
 import math
 import random
 import sys
@@ -189,6 +190,18 @@ LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = 
 SEARCH_S = 30.0         # seconds hunting with nobody in sight before it lets go
 WAKE_AFTER_S = 2.0      # continuous face needed to wake it (a debounce; 0 to disable)
 WAKE_MS = 2200          # how gently it rises — it has been hanging slack
+# RUNNING FOR DAYS. Two things accumulate while the arm is busy and neither
+# shows up in a short test: heat in the servos that are holding weight, and
+# whatever it is in the supply that sags. So activity is rationed. However
+# popular the room is, the arm takes a break after ACTIVE_MAX_S and will not
+# be woken again for COOLDOWN_S. The break is the same slack state as an
+# empty room: upright, unpowered, cooling.
+ACTIVE_MAX_S = 240.0    # longest unbroken stretch of being awake
+COOLDOWN_S = 90.0       # enforced slack afterwards, faces or no faces
+# Wired only: the controller can report its supply. Under this, stop striking;
+# stay under it and go slack before the servos raise the alarm themselves.
+BROWNOUT_V = 7.0
+VOLTS_EVERY_S = 1.0     # how often to ask (each read is a USB round trip)
 PARK_MS = 2500          # and how gently it goes back down
 SLACK_REASSERT_S = 60.0 # re-send the unload this often while asleep. BLE writes are
                         # never acknowledged, so this is the cheap insurance against
@@ -252,6 +265,19 @@ class Backend:
         except Exception as err:  # noqa: BLE001 - keep hunting; the next tick retries
             print(f"arm: move skipped ({err})")
 
+    def voltage(self) -> float | None:
+        """Supply volts, or None when we cannot know.
+
+        Bluetooth is write-only here, so wireless runs are blind to the one
+        number that predicts the alarm. That alone is a reason to deploy on
+        the cable."""
+        if self._servo is None:
+            return None
+        try:
+            return self._arm.getBatteryVoltage()
+        except Exception:  # noqa: BLE001 - a dropped read is not an emergency
+            return None
+
     def prewarm(self) -> None:
         """Start reconnecting in the background.
 
@@ -293,28 +319,16 @@ class Backend:
 
 
 class DryBackend:
-    """No arm: print the base heading (and any elbow/shoulder move) so the
-    eyes and the strike can be tested anywhere."""
+    """No arm: print what would have been sent, so the eyes, the strike and
+    the sleep cycle can all be exercised anywhere."""
 
     released = False
 
+    def voltage(self) -> float | None:
+        return None
+
     def prewarm(self) -> None:
-        """Start reconnecting in the background.
-
-        Called the instant a face appears while asleep, so the link is up by
-        the time the wake threshold passes rather than costing seconds after
-        it. Failures are silent: the wake's first send retries anyway.
-        """
-        if self._servo is not None or not self.released:
-            return
-
-        def go() -> None:
-            try:
-                self._arm.reconnect()
-            except Exception:  # noqa: BLE001 - the wake will try again
-                pass
-
-        threading.Thread(target=go, daemon=True).start()
+        pass
 
     def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
         self.released = True
@@ -322,6 +336,7 @@ class DryBackend:
             print("  (servos off, link dropped, limp)")
 
     def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
+        self.released = False
         if {3, 4, 5} & moves_deg.keys():
             joints = " ".join(f"s{sid}={d:+.0f}" for sid, d in sorted(moves_deg.items()))
             print(f"  pose -> {joints} over {dur_ms} ms")
@@ -478,6 +493,40 @@ class Eyes:
         self._cam.release()
         if self._show:
             self._cv2.destroyAllWindows()
+
+
+class Log:
+    """Append-only flight recorder.
+
+    The failure we care about takes the power with it, so nothing that is
+    still sitting in a buffer survives to be read. Every line is flushed as
+    it is written, and the file is opened in append mode, so days of runs
+    accumulate and the last line before a death is always on disk.
+
+    One line per event, tab separated: a wall-clock stamp, seconds since the
+    run began, a kind, then key=value fields.
+    """
+
+    def __init__(self, path: str | None) -> None:
+        self.fh = None
+        if not path:
+            return
+        self.fh = open(path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115 - lives for the run
+        self.fh.write(f"# ---- run started {_dt.datetime.now().isoformat(timespec='seconds')}\n")
+
+    def event(self, now: float, kind: str, **fields: object) -> None:
+        if self.fh is None:
+            return
+        bits = " ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}"
+                        for k, v in fields.items())
+        stamp = _dt.datetime.now().strftime("%H:%M:%S")
+        self.fh.write(f"{stamp}\t{now:9.1f}\t{kind}\t{bits}\n")
+
+    def close(self) -> None:
+        if self.fh is not None:
+            self.fh.write("# ---- run ended cleanly\n")
+            self.fh.close()
+            self.fh = None
 
 
 class Keys:
@@ -642,6 +691,8 @@ def main() -> None:
     p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "yunet", "haar", "person"),
                    help="background subtraction (default), frame differencing, face (YuNet, or Haar without its model), or HOG person")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
+    p.add_argument("--log", default="gloom.log", metavar="FILE",
+                   help="append a flight recorder to this file (default gloom.log; '' to disable)")
     p.add_argument("--flip", action="store_true",
                    help="invert BASE_SIGN for this run — use it to settle which way servo 6 turns")
     a = p.parse_args()
@@ -667,6 +718,10 @@ def main() -> None:
               f"Esc or q to stop.")
 
     t0 = time.monotonic()
+    log = Log(a.log)
+    log.event(0.0, "start", eyes=(eyes.kind if eyes else "none"),
+              link=("usb" if a.usb else ("dry" if a.dry else "ble")),
+              search_s=SEARCH_S, active_max_s=ACTIVE_MAX_S)
     anim = Animator(POSE_POINT_DEG if awake else POSE_SLACK_DEG)
     heading_offset = 0.0  # phase shift accumulated by snaps
     frozen_until = 0.0
@@ -681,12 +736,60 @@ def main() -> None:
     coil = "out"          # strike phase: out / coiling / coiled / settling
     coil_at = 0.0         # when the next phase is due
     hold_override = None  # replaces the random coiled hold, for the entrance
+    awake_since = 0.0     # start of the current unbroken stretch of being awake
+    cooldown_until = 0.0  # refuse to wake before this, however many faces turn up
+    volts = None          # last supply reading, wired runs only
+    volts_at = -1e9
+    low_since = None      # when the supply first went under BROWNOUT_V
+    last_sample = -1e9    # when the recorder last took a routine reading
+
+    def go_slack(now: float, reason: str, cooldown: float = 0.0) -> float:
+        """Stand upright, cut the power, and say why. Returns the time before
+        which waking is refused."""
+        print(f"\n{reason} — standing up and cutting power.")
+        log.event(now, "slack", reason=reason, cooldown_s=cooldown,
+                  awake_for=now - awake_since, volts=volts if volts else "?")
+        try:
+            arm.send(POSE_SLACK_DEG, PARK_MS)
+            time.sleep(PARK_MS / 1000 + 0.2)
+        except Exception as err:  # noqa: BLE001 - park is best-effort; the unload matters
+            log.event(now, "park_failed", err=type(err).__name__)
+        arm.relax()
+        anim.cur = dict(POSE_SLACK_DEG)
+        return now + cooldown
+
     try:
         while True:
             now = time.monotonic() - t0
             if keys.quit_requested():
                 print("\nstopping.")
+                log.event(now, "quit", by="key")
                 break
+
+            # SUPPLY WATCH. Wired only, and the whole argument for running on
+            # the cable: the alarm is preceded by the voltage falling, so this
+            # is the one signal that lets us back off BEFORE the servos do it
+            # for us — at which point they latch and only a power cycle helps.
+            if now - volts_at >= VOLTS_EVERY_S:
+                volts_at = now
+                v = arm.voltage()
+                if v is not None:
+                    volts = v
+                    if v < BROWNOUT_V:
+                        if low_since is None:
+                            low_since = now
+                            print(f"\n!! supply {v:.2f} V, under {BROWNOUT_V:.1f} — easing off.")
+                            log.event(now, "brownout", volts=v, coil=coil, awake=awake)
+                    elif low_since is not None:
+                        log.event(now, "recovered", volts=v, low_for=now - low_since)
+                        low_since = None
+
+            if now - last_sample >= 5.0:
+                last_sample = now
+                log.event(now, "tick",
+                          state=("slack" if not awake else ("track" if locked else "search")),
+                          coil=coil, base=base, volts=(volts if volts is not None else "?"),
+                          awake_for=(now - awake_since if awake else 0.0))
 
             if eyes is not None:
                 if eyes.ended:
@@ -709,6 +812,13 @@ def main() -> None:
                         warming = True
                     elif held == 0:
                         warming = False
+                    if now < cooldown_until:
+                        if held > 0 and now - last_report >= 5.0:
+                            print(f"  resting — {cooldown_until - now:.0f}s before it will "
+                                  f"wake, face or no face", end="\r", flush=True)
+                            last_report = now
+                        time.sleep(TICK)
+                        continue
                     if held < WAKE_AFTER_S:
                         if not arm.released and now - last_unload >= SLACK_REASSERT_S:
                             arm.relax(quiet=True)
@@ -729,24 +839,32 @@ def main() -> None:
                     anim.cur = dict(POSE_SLACK_DEG)  # it is wherever we left it hanging
                     anim.to(POSE_COIL_DEG, WAKE_MS, now)
                     awake, locked, greeted, warming = True, True, True, False
+                    awake_since = now
+                    log.event(now, "wake", held=held, base=base, volts=(volts if volts else "?"))
                     last_seen, last_report = now, now
                     coil, coil_at, hold_override = "coiling", now + WAKE_MS / 1000, GREET_HOLD_S
                     frozen_until = 0.0
                     continue
 
-                # --- SEARCH has run out: stand up and cut the power -------- #
+                # --- three ways to end up slack ---------------------------- #
+                reason, cooldown = None, 0.0
                 if now - last_seen > SEARCH_S:
-                    print(f"\nnothing for {SEARCH_S:.0f}s — standing up and cutting power.")
-                    arm.send(POSE_SLACK_DEG, PARK_MS)
-                    time.sleep(PARK_MS / 1000 + 0.2)
-                    arm.relax()
-                    print("servos off, Bluetooth link dropped — no current, no holding "
-                          "torque. Push it around by hand.")
-                    print("  (it will wake again on a face held for "
-                          f"{WAKE_AFTER_S:.0f}s, including yours)")
+                    reason = f"nothing for {SEARCH_S:.0f}s"
+                elif now - awake_since > ACTIVE_MAX_S:
+                    # However busy the room is, it stops. Heat and supply sag
+                    # both build over minutes, and nothing else in this loop
+                    # would ever choose to stop while people keep arriving.
+                    reason, cooldown = f"awake {ACTIVE_MAX_S:.0f}s — taking a break", COOLDOWN_S
+                elif low_since is not None and now - low_since > 3.0:
+                    reason, cooldown = f"supply stayed under {BROWNOUT_V:.1f} V", COOLDOWN_S
+                if reason:
+                    cooldown_until = go_slack(now, reason, cooldown)
+                    print("servos off — no current, no holding torque. Push it by hand.")
+                    if cooldown:
+                        print(f"  (resting {cooldown:.0f}s before it will wake again)")
                     awake, locked, greeted, coil = False, False, False, "out"
-                    anim.cur = dict(POSE_SLACK_DEG)
                     seen_since, last_unload, slept_at, last_report = None, now, now, now
+                    low_since = None
                     continue
 
                 if seen is not None:
@@ -772,6 +890,7 @@ def main() -> None:
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
                     print(f"lost it — searching for {SEARCH_S - (now - last_seen):.0f}s more")
+                    log.event(now, "lost", base=base)
                     locked = False
                     heading_offset = rephase(now, base)
                     if coil != "out":
@@ -792,13 +911,14 @@ def main() -> None:
                 base = sweep_deg(now, heading_offset)
                 if random.random() < SNAP_CHANCE:
                     heading_offset += random.uniform(-2.2, 2.2)  # a sudden re-aim
-            elif now >= coil_at and now >= frozen_until:
+            elif now >= coil_at and now >= frozen_until and low_since is None:
                 # THE STRIKE, as scheduling rather than choreography. Each phase
                 # only hands the animator a target and a time; the tick below
                 # keeps sending, so the base follows the victim all the way
                 # through the draw, the lunge and the recovery.
                 if coil == "out":
                     print("...drawing back")
+                    log.event(now, "coil", base=base, volts=(volts if volts else "?"))
                     anim.to({4: POSE_COIL_DEG[4], 3: POSE_COIL_DEG[3]}, COIL_MS, now)
                     anim.to({5: POSE_COIL_DEG[5]}, COIL_MS, now, delay_s=COIL_STAGGER_S)
                     coil = "coiling"
@@ -809,6 +929,7 @@ def main() -> None:
                     hold_override = None
                 elif coil == "coiled":
                     print("LURCH")
+                    log.event(now, "lurch", base=base, volts=(volts if volts else "?"))
                     anim.to(lurch_pose(), LURCH_MS, now)
                     coil, coil_at = "settling", now + LURCH_MS / 1000
                 else:
@@ -833,6 +954,7 @@ def main() -> None:
         except Exception as err:  # noqa: BLE001
             print(f"arm: could not park it ({err}); power-cycle it to relax")
         keys.close()
+        log.close()
         if eyes is not None:
             eyes.close()
 

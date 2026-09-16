@@ -65,6 +65,40 @@ ported from the 2024 HalloweenTracker head; the rest is new.) Describe where it 
 the top of `gloom.py` (metres forward and left of the pivot, and which
 way the lens points), plus its horizontal field of view.
 
+### Running it for days
+
+The overload alarm is the thing that ends an unattended run: the servos
+latch, the board drops its radio, and only a power cycle brings it back.
+Three defences, in order of how much they are worth.
+
+**Deploy on the USB cable, not Bluetooth.** The controller reports its
+supply voltage, and the voltage falls *before* the alarm fires. Wired, the
+hunt watches it and eases off — no strikes under `BROWNOUT_V`, and slack if
+it stays there. Wireless is write-only and therefore blind to the one
+signal that predicts the failure. USB also removes the radio that the
+brownout knocks over in the first place.
+
+```bash
+py gloom.py --eyes --usb
+```
+
+**Activity is rationed.** However busy the room is, the arm stops after
+`ACTIVE_MAX_S` and refuses to wake for `COOLDOWN_S`. Heat and supply sag
+both build over minutes, and nothing else in the loop would ever choose to
+stop while people keep arriving.
+
+**Everything is recorded.** `--log FILE` (on by default, `gloom.log`)
+appends a flushed line per event and every five seconds otherwise: state,
+strike phase, base angle, supply voltage, how long it has been awake. The
+failure takes the power with it, so nothing is buffered. After a death,
+the last lines say what it was doing and what the supply was doing.
+
+```
+10:42:41   12.1  slack  reason=awake 240s — taking a break awake_for=240.1 volts=8.8
+10:42:55   25.9  lurch  base=-20.2 volts=7.4
+10:42:56   26.4  brownout  volts=6.2 coil=settling awake=True
+```
+
 **With `--eyes` the arm is asleep almost all the time.** It is meant to sit
 in a corner doing nothing, so its resting state is genuinely off:
 

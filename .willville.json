@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Smoothed out how the hand moves — it used to freeze mid-routine and ignore you until each move finished, now it keeps following you through everything. Also gave it a proper entrance when it first spots someone, and made waking up from sleep much quicker.",
-    "direction": "Try it on the arm and see whether the entrance reads well and the reconnect is finally fast enough",
+    "status": "Going after the beeping properly rather than patching around it. The hand now keeps a black box of everything it does, takes a mandatory break every few minutes, and on a cable can watch its own power and back off before it trips.",
+    "direction": "Run it wired for a few hours and read the log after it next trips, which should finally say what it was doing at the time",
     "last_update": "2026-09-16T00:00:00Z"
   }
 }
