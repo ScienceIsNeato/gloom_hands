@@ -75,6 +75,10 @@ class BleArm:
         self._char = None
         self._name_hints = name_hints
         self._timeout = timeout
+        self._pending: bytes | None = None   # newest position packet not yet written
+        self._writing = False                # a drain task is running
+        self.write_errors = 0
+        self.writes_done = 0
         self._run(self._connect(name_hints, timeout))
 
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
@@ -176,13 +180,51 @@ class BleArm:
             except Exception as err:  # noqa: BLE001
                 raise ConnectionError(f"arm write failed after reconnect: {err}") from first
 
+    def write_latest(self, packet: bytes) -> None:
+        """Queue a packet, discarding any earlier one still waiting.
+
+        Never blocks the caller. A Bluetooth write can take a good fraction
+        of a tick — longer on Windows — and waiting for each one made the
+        loop period the tick PLUS the write, so the arm moved in fewer,
+        unevenly spaced steps. That is what jerky looks like.
+
+        Dropping a superseded packet is not a loss: each one is a complete
+        absolute posture, so an older one waiting behind a newer one would
+        only command a pose the arm has already moved past.
+        """
+        self._pending = packet
+        if not self._writing:
+            self._writing = True
+            asyncio.run_coroutine_threadsafe(self._drain(), self._loop)
+
+    async def _drain(self) -> None:
+        try:
+            while True:
+                packet, self._pending = self._pending, None
+                if packet is None:
+                    return
+                try:
+                    if self._client is None or not self._client.is_connected:
+                        raise ConnectionError("not connected")
+                    await self._client.write_gatt_char(self._char, packet, response=False)
+                    self.writes_done += 1
+                except Exception:  # noqa: BLE001 - the sync side reconnects; do not stall here
+                    self.write_errors += 1
+                    self._pending = None
+                    return
+        finally:
+            self._writing = False
+
     def set_position(
         self, moves: int | list[tuple[int, int]], pos: int | None = None, duration_ms: int = 1500
     ) -> None:
         """set_position(3, 600) or set_position([(3, 600), (6, 400)]). Raw units."""
         if isinstance(moves, int):
             moves = [(moves, int(pos))]  # type: ignore[arg-type]
-        self._write(servo_move_packet(moves, duration_ms))
+        packet = servo_move_packet(moves, duration_ms)
+        if not self.connected:
+            self.reconnect()  # rare, and worth blocking for
+        self.write_latest(packet)
 
     def set_angle(
         self,

@@ -87,6 +87,20 @@ py gloom.py --eyes --usb
 both build over minutes, and nothing else in the loop would ever choose to
 stop while people keep arriving.
 
+**Motion smoothness is a cadence problem.** Commands go out every `TICK`,
+and two things used to steal from that budget. Bluetooth writes were waited
+on, so the loop period became the tick *plus* the write — on a slow link
+that is 2.9 commands a second where 4.5 was intended. And the loop slept a
+full tick after the work rather than until the next one was due. Writes are
+now fired and forgotten, with any superseded packet discarded rather than
+queued (each one is a complete absolute posture, so an old one is worse
+than none), and the loop sleeps only the remainder. `--tick` lowers the
+interval further if it still looks coarse, at the cost of more packets.
+
+The recorder carries `look_ms` (camera plus detection), `send_ms` (handing
+a packet to the arm) and `late` (ticks that overran their slot) so this is
+measurable rather than a matter of opinion.
+
 **Everything is recorded.** `--log FILE` (on by default, `gloom.log`)
 appends a flushed line per event and every five seconds otherwise: state,
 strike phase, base angle, supply voltage, how long it has been awake. The

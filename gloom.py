@@ -695,6 +695,9 @@ def main() -> None:
     p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "yunet", "haar", "person"),
                    help="background subtraction (default), frame differencing, face (YuNet, or Haar without its model), or HOG person")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
+    p.add_argument("--tick", type=float, metavar="SECONDS",
+                   help=f"seconds between command packets (default {TICK}); lower is smoother "
+                        f"but sends more, so watch the supply")
     p.add_argument("--hfov", type=float, metavar="DEG",
                    help="camera horizontal field of view; wide-angle webcams are often 90-120")
     p.add_argument("--mirrored", action="store_true", help="the camera image is left-right flipped")
@@ -704,6 +707,9 @@ def main() -> None:
                    help="invert BASE_SIGN for this run — use it to settle which way servo 6 turns")
     a = p.parse_args()
 
+    if a.tick:
+        globals()["TICK"] = a.tick
+        print(f"eyes: {1 / a.tick:.1f} command packets per second")
     if a.hfov:
         CAMERA["hfov_deg"] = a.hfov
         print(f"eyes: camera field of view set to {a.hfov:.0f} deg")
@@ -754,6 +760,21 @@ def main() -> None:
     volts_at = -1e9
     low_since = None      # when the supply first went under BROWNOUT_V
     last_sample = -1e9    # when the recorder last took a routine reading
+    slow_look = 0.0       # worst camera+detect time since the last log line, ms
+    slow_send = 0.0       # worst time spent handing a packet to the arm, ms
+    late = 0              # ticks that overran their slot
+
+    def pace(due: float) -> None:
+        """Sleep until the tick is actually due.
+
+        Sleeping a whole TICK after the work made the loop period the tick
+        PLUS however long the work took, which over Bluetooth meant fewer and
+        unevenly spaced commands — the jerkiness. Now the cadence is the tick,
+        and slow work eats its own slack rather than everyone else's.
+        """
+        left = due - (time.monotonic() - t0)
+        if left > 0:
+            time.sleep(left)
 
     def go_slack(now: float, reason: str, cooldown: float = 0.0) -> float:
         """Stand upright, cut the power, and say why. Returns the time before
@@ -773,6 +794,7 @@ def main() -> None:
     try:
         while True:
             now = time.monotonic() - t0
+            tick_due = now + TICK
             if keys.quit_requested():
                 print("\nstopping.")
                 log.event(now, "quit", by="key")
@@ -801,13 +823,19 @@ def main() -> None:
                 log.event(now, "tick",
                           state=("slack" if not awake else ("track" if locked else "search")),
                           coil=coil, base=base, volts=(volts if volts is not None else "?"),
-                          awake_for=(now - awake_since if awake else 0.0))
+                          awake_for=(now - awake_since if awake else 0.0),
+                          look_ms=slow_look, send_ms=slow_send, late=late)
+                slow_look = slow_send = 0.0
+                late = 0
 
             if eyes is not None:
                 if eyes.ended:
                     print("video ended")
                     break
+                t_look = time.monotonic()
                 seen = eyes.look(first=not locked)
+                look_ms = (time.monotonic() - t_look) * 1000
+                slow_look = max(slow_look, look_ms)
                 if seen is None:
                     seen_since = None
                 elif seen_since is None:
@@ -829,7 +857,7 @@ def main() -> None:
                             print(f"  resting — {cooldown_until - now:.0f}s before it will "
                                   f"wake, face or no face", end="\r", flush=True)
                             last_report = now
-                        time.sleep(TICK)
+                        pace(tick_due)
                         continue
                     if held < WAKE_AFTER_S:
                         if not arm.released and now - last_unload >= SLACK_REASSERT_S:
@@ -842,7 +870,7 @@ def main() -> None:
                         elif now - last_report >= 15.0:
                             print(f"  asleep {now - slept_at:.0f}s, servos off, nobody in sight")
                             last_report = now
-                        time.sleep(TICK)
+                        pace(tick_due)
                         continue
                     # THE ENTRANCE: rise out of slack straight into the coil,
                     # writhe there for a beat, then strike. Not a power-on.
@@ -953,8 +981,13 @@ def main() -> None:
             # posture, the writhe laid over it, and the freshest base heading.
             home = anim.pose_at(now)
             nod = 0.6 if coil in ("coiling", "coiled") else 1.0
+            if time.monotonic() - t0 > tick_due:
+                late += 1  # the work overran its slot; the cadence is slipping
+            t_send = time.monotonic()
             arm.send(body_pose(now, base, home, nod, amp), int(TICK * 1000) + 80)
-            time.sleep(TICK)
+            send_ms = (time.monotonic() - t_send) * 1000
+            slow_send = max(slow_send, send_ms)
+            pace(tick_due)
     except KeyboardInterrupt:
         pass
     finally:
