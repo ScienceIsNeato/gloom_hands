@@ -87,7 +87,27 @@ py gloom.py --eyes --usb
 both build over minutes, and nothing else in the loop would ever choose to
 stop while people keep arriving.
 
-**Smoothness is about the move DURATION, more than the rate.** Each packet
+**Do not stream poses. Send waypoints.** Measured on the arm with
+`smoothtest.py`: a single four-second command sweeps perfectly smoothly,
+and the same arc sent as a stream of small steps gets rougher the more
+steps you use. These servos do not blend a new command into the move they
+are already making — they restart from wherever they are, so every packet
+is a fresh little acceleration. Streaming a pose several times a second was
+not refining the motion, it was chopping it up, and the board's light
+blinking in time with the shudder was the arm reporting one flash per
+interruption.
+
+So each joint is given a destination and a travel time and then left alone.
+The writhe aims at the sine's next peak or trough, which is two commands a
+cycle instead of fifteen, and the servo draws the line between them — those
+turning points are where the motion is genuinely meant to pause, so the
+stop costs nothing. The base is different: it re-aims on a deadband, and
+its travel time is `BASE_OVERLAP` times the gap between commands so the
+move is always still running when the next lands and it never comes to
+rest. A stop and a restart is exactly the twitch being removed. Per-joint
+command rates drop from 4.5 a second to under two.
+
+**Older note, still true: duration must outlast the gap.** Each packet
 tells a servo where to go *and how long to take*. If that duration is
 shorter than the gap to the next packet, the servo arrives early and then
 sits perfectly still until the next one lands: move, stop, move, stop, which

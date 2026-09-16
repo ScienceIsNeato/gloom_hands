@@ -212,6 +212,15 @@ COOLDOWN_S = 90.0       # enforced slack afterwards, faces or no faces
 # Wired only: the controller can report its supply. Under this, stop striking;
 # stay under it and go slack before the servos raise the alarm themselves.
 BROWNOUT_V = 7.0
+BASE_STEP_DEG = 3.0     # re-aim the base only once the victim has moved this far...
+BASE_EVERY_S = 0.50     # ...and never more often than this. Each command restarts the
+                        # servo's move, so fewer and longer beats more and finer.
+BASE_OVERLAP = 1.7      # the base's travel time as a multiple of that interval. Over 1.0
+                        # the move is always still running when the next one lands, so the
+                        # base never comes to rest between commands — a stop and a restart
+                        # is precisely the twitch we are trying to remove. The writhe does
+                        # not need this: its waypoints ARE the sine's turning points, where
+                        # the motion is genuinely meant to pause.
 VOLTS_EVERY_S = 1.0     # how often to ask (each read is a USB round trip)
 UNREACHABLE_S = 8.0     # unresponsive this long and we call it: the servos have latched
 PARK_MS = 2500          # and how gently it goes back down
@@ -722,6 +731,81 @@ class Animator:
         return all(now >= t0 + dur for _, _, t0, dur in self._legs.values())
 
 
+class Waypoints:
+    """Tell each joint where to go and how long to take, then LEAVE IT ALONE.
+
+    Measured on the arm: one four-second command produces a perfectly smooth
+    sweep, and the same arc sent as a stream of small steps gets rougher the
+    more steps you use. These servos do not blend a new command into the move
+    they are already making — they restart from wherever they are, so every
+    packet is a fresh little acceleration. Streaming a pose several times a
+    second was therefore not refining the motion, it was chopping it up, and
+    the board's light blinking in time with the shudder was the arm reporting
+    exactly that, one flash per interruption.
+
+    So each joint is given a destination and a duration and then left to get
+    on with it. Nothing is sent to a joint that is still usefully travelling.
+    Joints that happen to come due together are batched into one packet.
+    """
+
+    def __init__(self) -> None:
+        self.until: dict[int, float] = {}    # when each joint's current move ends
+        self.target: dict[int, float] = {}   # where it was last told to go
+        # duration -> {servo: degrees}. The protocol carries ONE duration per
+        # packet, so joints travelling for different lengths of time cannot
+        # share one: batching them would hand the base the writhe's four
+        # seconds and vice versa.
+        self._batch: dict[int, dict[int, float]] = {}
+
+    def free(self, sid: int, now: float) -> bool:
+        return now >= self.until.get(sid, -1e9)
+
+    def go(self, sid: int, deg: float, dur_ms: float, now: float) -> None:
+        """Queue a destination for this joint, to leave with the next flush."""
+        self.target[sid] = deg
+        self.until[sid] = now + dur_ms / 1000.0
+        # round to 50 ms so joints that want near-identical times still share
+        # a packet, without anyone's travel time being materially altered
+        slot = max(50, int(round(dur_ms / 50.0) * 50))
+        self._batch.setdefault(slot, {})[sid] = deg
+
+    def flush(self, arm: "Backend") -> int:
+        """Send whatever came due, one packet per travel time. Returns the
+        number of packets sent."""
+        sent = 0
+        for dur, moves in sorted(self._batch.items()):
+            arm.send(moves, dur)
+            sent += 1
+        self._batch = {}
+        return sent
+
+    def forget(self) -> None:
+        self.until.clear()
+        self.target.clear()
+        self._batch = {}
+
+
+def next_extreme(rate: float, phase: float, t: float) -> tuple[float, float]:
+    """When a sine next reaches a peak or trough, and which one.
+
+    Waypointing at the extremes is the fewest commands that still describes
+    the motion: two per cycle, and the servo draws the line between them.
+    Anything finer only adds interruptions, which is the thing that hurts.
+    """
+    k = math.ceil((rate * t + phase - math.pi / 2) / math.pi)
+    when = (math.pi / 2 + k * math.pi - phase) / rate
+    return when, (1.0 if k % 2 == 0 else -1.0)
+
+
+#: Each writhe joint as (servo, depth, rate, phase). The gripper's fast
+#: tremor is gone: at two commands per cycle there is nothing to carry it,
+#: and it was never renderable at any rate this link supports.
+WRITHE_WAVES = (
+    (1, GROPE_DEPTH, GROPE_RATE, 1.0),
+    (2, ROLL_DEPTH, ROLL_RATE, 0.0),
+    (3, NOD_DEPTH, NOD_RATE, 2.1),
+)
+
 #: Command updates per second the writhe was tuned for. Everything in
 #: WRITHE_TERMS assumes roughly eight of them per cycle; fewer and a sine
 #: arrives as a staircase.
@@ -861,7 +945,7 @@ def main() -> None:
     log.event(0.0, "start", eyes=(eyes.kind if eyes else "none"),
               link=("usb" if a.usb else ("dry" if a.dry else "ble")),
               search_s=SEARCH_S, active_max_s=ACTIVE_MAX_S)
-    anim = Animator(POSE_POINT_DEG if awake else POSE_SLACK_DEG)
+    wp = Waypoints()
     heading_offset = 0.0  # phase shift accumulated by snaps
     frozen_until = 0.0
     last_seen = 0.0       # when the eyes last saw someone; also the SEARCH_S clock
@@ -884,9 +968,8 @@ def main() -> None:
     slow_look = 0.0       # worst camera+detect time since the last log line, ms
     slow_send = 0.0       # worst time spent handing a packet to the arm, ms
     late = 0              # ticks that overran their slot
-    writhe_t = 0.0        # the writhe's own clock, which runs slow on a slow link
-    prev_now = 0.0
-    scale = 1.0
+    last_base_cmd = -1e9  # when the base was last given a new heading
+    packets = 0           # commands actually sent since the last log line
     health_at = -1e9      # when the arm was last asked whether it is alive
     unwell_since = None   # when it stopped answering
     declared_dead = False # so the diagnosis is printed once, not every tick
@@ -915,7 +998,7 @@ def main() -> None:
         except Exception as err:  # noqa: BLE001 - park is best-effort; the unload matters
             log.event(now, "park_failed", err=type(err).__name__)
         arm.relax()
-        anim.cur = dict(POSE_SLACK_DEG)
+        wp.forget()
         return now + cooldown
 
     try:
@@ -980,7 +1063,8 @@ def main() -> None:
                           awake_for=(now - awake_since if awake else 0.0),
                           look_ms=slow_look, send_ms=slow_send, late=late,
                           gap_ms=arm.interval_ms,
-                          link_hz=arm.delivered_hz(), motion=scale)
+                          pkts_per_s=packets / 5.0)
+                packets = 0
                 slow_look = slow_send = 0.0
                 late = 0
 
@@ -1032,8 +1116,9 @@ def main() -> None:
                     # writhe there for a beat, then strike. Not a power-on.
                     base = clamp_deg(6, seen[0])
                     print(f"\nsomething is there ({held:.1f}s of face) — waking up.")
-                    anim.cur = dict(POSE_SLACK_DEG)  # it is wherever we left it hanging
-                    anim.to(POSE_COIL_DEG, WAKE_MS, now)
+                    wp.forget()  # it is wherever we left it hanging
+                    for _sid, _deg in POSE_COIL_DEG.items():
+                        wp.go(_sid, _deg, WAKE_MS, now)
                     awake, locked, greeted, warming = True, True, True, False
                     awake_since = now
                     log.event(now, "wake", held=held, base=base, volts=(volts if volts else "?"))
@@ -1081,10 +1166,8 @@ def main() -> None:
                         last_report = now
                     elif now - last_report >= 1.5:  # show that it is still following
                         phase = coil if coil != "out" else "tracking"
-                        hz = arm.delivered_hz()
-                        slow = f"  [link {hz:.1f}/s, writhe at {scale:.0%}]" if scale < 0.95 else ""
                         print(f"  {phase}: face {t.cam_bearing_deg:+5.1f} deg at "
-                              f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg{slow}")
+                              f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg")
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
                     print(f"lost it — searching for {SEARCH_S - (now - last_seen):.0f}s more")
@@ -1092,7 +1175,8 @@ def main() -> None:
                     locked = False
                     heading_offset = rephase(now, base)
                     if coil != "out":
-                        anim.to(reach_pose(), 1500, now)
+                        for _sid, _deg in reach_pose().items():
+                            wp.go(_sid, _deg, 1500, now)
                         coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
 
             # FREEZE: it goes utterly still — but never stops watching you.
@@ -1117,10 +1201,12 @@ def main() -> None:
                 if coil == "out":
                     print("...drawing back")
                     log.event(now, "coil", base=base, volts=(volts if volts else "?"))
-                    anim.to({4: POSE_COIL_DEG[4], 3: POSE_COIL_DEG[3]}, COIL_MS, now)
-                    anim.to({5: POSE_COIL_DEG[5]}, COIL_MS, now, delay_s=COIL_STAGGER_S)
-                    coil = "coiling"
-                    coil_at = now + COIL_STAGGER_S + COIL_MS / 1000
+                    wp.go(4, POSE_COIL_DEG[4], COIL_MS, now)
+                    wp.go(3, POSE_COIL_DEG[3], COIL_MS, now)
+                    coil, coil_at = "folding", now + COIL_STAGGER_S
+                elif coil == "folding":
+                    wp.go(5, POSE_COIL_DEG[5], COIL_MS, now)
+                    coil, coil_at = "coiling", now + COIL_MS / 1000
                 elif coil == "coiling":
                     coil = "coiled"
                     coil_at = now + (hold_override or random.uniform(*COIL_HOLD_S))
@@ -1128,28 +1214,52 @@ def main() -> None:
                 elif coil == "coiled":
                     print("LURCH")
                     log.event(now, "lurch", base=base, volts=(volts if volts else "?"))
-                    anim.to(lurch_pose(), LURCH_MS, now)
+                    for _sid, _deg in lurch_pose().items():
+                        wp.go(_sid, _deg, LURCH_MS, now)
                     coil, coil_at = "settling", now + LURCH_MS / 1000
                 else:
                     sid = LURCH_OVERSHOOT_JOINT
-                    anim.to({sid: reach_pose()[sid]}, SETTLE_MS, now)
+                    wp.go(sid, reach_pose()[sid], SETTLE_MS, now)
                     coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
 
             # ONE packet per tick, carrying everything at once: the animated
             # posture, the writhe laid over it, and the freshest base heading.
-            # The writhe runs on its own clock. Accumulating a scaled phase
-            # rather than scaling `now` means the rate can change without the
-            # oscillators jumping.
-            scale = motion_scale(arm.delivered_hz())
-            writhe_t += max(0.0, now - prev_now) * scale
-            prev_now = now
+            # --- WAYPOINTS --------------------------------------------- #
+            # Give a joint somewhere to go and how long to take, then leave it
+            # alone until it gets there. Nothing is sent per tick.
 
-            home = anim.pose_at(now)
-            nod = 0.6 if coil in ("coiling", "coiled") else 1.0
+            # The base re-aims only once the victim has actually moved, and
+            # never faster than BASE_EVERY_S. Every command restarts the
+            # servo's move, so a coarse stream of long travels beats a fine
+            # stream of short ones — which is the whole lesson here.
+            aim = clamp_deg(6, base)
+            if (abs(aim - wp.target.get(6, 1e9)) >= BASE_STEP_DEG
+                    and now - last_base_cmd >= BASE_EVERY_S):
+                travel = abs(aim - wp.target.get(6, aim))
+                wp.go(6, aim, max(BASE_EVERY_S * 1000 * BASE_OVERLAP,
+                                  travel / TRACK_SLEW_DPS * 1000 * BASE_OVERLAP), now)
+                last_base_cmd = now
+
+            # Each writhe joint is sent to the sine's next peak or trough, and
+            # draws the line there itself. Two commands a cycle, not fifteen.
+            if amp > 0:
+                for sid, depth, rate, phase in WRITHE_WAVES:
+                    if not wp.free(sid, now):
+                        continue  # still travelling; interrupting is the bug
+                    when, sign = next_extreme(rate, phase, now)
+                    if sid == 3:
+                        home = (POSE_COIL_DEG[3] if coil in ("coiling", "coiled")
+                                else reach_pose()[3])
+                        depth *= 0.6 if coil in ("coiling", "coiled") else 1.0
+                    else:
+                        home = POSE_POINT_DEG[sid]
+                    wp.go(sid, clamp_deg(sid, home + sign * depth),
+                          max(300.0, (when - now) * 1000), now)
+
             if time.monotonic() - t0 > tick_due:
                 late += 1  # the work overran its slot; the cadence is slipping
             t_send = time.monotonic()
-            arm.stream(body_pose(writhe_t, base, home, nod, amp))
+            packets += wp.flush(arm)
             send_ms = (time.monotonic() - t_send) * 1000
             slow_send = max(slow_send, send_ms)
             pace(tick_due)
