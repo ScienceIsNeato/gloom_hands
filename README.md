@@ -100,6 +100,19 @@ target has not moved is left out of the packet entirely: re-commanding a
 loaded shoulder several times a second only makes it hunt, and every joint
 costs bytes on the link that is already the bottleneck.
 
+**And the creature slows down when the link does.** A Bluetooth link that
+carries only a packet or so a second cannot render a half-hertz tremor: the
+arm gets two or three targets per cycle and lunges between them, which
+reads as a regular shudder at exactly the packet rate. So the writhe runs
+on its own clock, scaled by how fast packets are actually landing, keeping
+about nine commands per oscillator cycle whatever the link does. The arm
+squirms more languidly on a slow link rather than juddering. The log's
+`link_hz` and `motion` columns say what it settled on, and the tracking
+line shows it too when the writhe is held back.
+
+A slow link is worth fixing rather than accommodating: 1.3 packets a second
+is abnormal for Bluetooth, and the cable has no such limit.
+
 **Cadence matters too.** Commands go out every `TICK`,
 and two things used to steal from that budget. Bluetooth writes were waited
 on, so the loop period became the tick *plus* the write — on a slow link
@@ -305,6 +318,7 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 - `servo_watch.py` — wired load diagnostic: which joint is straining, and `--relax` to limp the arm
 - `test_geometry.py` — hand-computed checks for the camera-offset trig; no hardware needed
 - `test_motion.py` — writhe budgets: is each oscillator slow enough to render, and to afford?
+- `test_backends.py` — the real and dry backends must keep the same surface
 - `probe.py` — USB first-contact: find device, battery, joint positions
 - `move.py` / `move_ble.py` — one-shot single-servo move (wired / wireless)
 - `teleop.py` — curses keyboard driving; `--ble` for wireless

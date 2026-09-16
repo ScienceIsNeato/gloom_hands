@@ -268,6 +268,13 @@ class Backend:
         self.interval_ms = TICK * 1000.0  # measured spacing between packets
         self._sent_units: dict[int, int] = {}  # last value actually commanded per servo
 
+    def delivered_hz(self) -> float:
+        """Packets per second the arm is ACTUALLY hearing — the slower of what
+        the loop offers and what the link carries."""
+        link = getattr(self._arm, "write_interval_ms", 0.0) if self._servo is None else 0.0
+        gap = max(self.interval_ms, link)
+        return (1000.0 / gap) if gap > 0 else (1.0 / TICK)
+
     def stream(self, moves_deg: dict[int, float]) -> None:
         """Send a posture as part of the continuous stream.
 
@@ -403,8 +410,8 @@ class DryBackend:
     released = False
     interval_ms = TICK * 1000.0
 
-    def stream(self, moves_deg: dict[int, float]) -> None:
-        self.send(moves_deg, int(TICK * 1000))
+    def delivered_hz(self) -> float:
+        return 1.0 / TICK
 
     def voltage(self) -> float | None:
         return None
@@ -415,12 +422,15 @@ class DryBackend:
     def prewarm(self) -> None:
         pass
 
+    def stream(self, moves_deg: dict[int, float]) -> None:
+        self.send(moves_deg, int(TICK * 1000))
+
     def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
         self.released = True
         if not quiet:
             print("  (servos off, link dropped, limp)")
 
-    def send(self, moves_deg: dict[int, float], dur_ms: int) -> None:
+    def send(self, moves_deg: dict[int, float], dur_ms: int, _measured: bool = False) -> None:
         self.released = False
         if {3, 4, 5} & moves_deg.keys():
             joints = " ".join(f"s{sid}={d:+.0f}" for sid, d in sorted(moves_deg.items()))
@@ -712,6 +722,26 @@ class Animator:
         return all(now >= t0 + dur for _, _, t0, dur in self._legs.values())
 
 
+#: Command updates per second the writhe was tuned for. Everything in
+#: WRITHE_TERMS assumes roughly eight of them per cycle; fewer and a sine
+#: arrives as a staircase.
+DESIGN_HZ = 1.0 / TICK
+
+
+def motion_scale(delivered_hz: float) -> float:
+    """How much to slow the writhe down when the link cannot keep up.
+
+    A Bluetooth link that only carries a packet or so a second cannot render
+    a half-hertz tremor: the arm receives two or three targets per cycle and
+    lunges between them, which reads as a regular shudder at exactly the
+    packet rate. Rather than send motion that cannot arrive, slow the whole
+    creature by the same factor. It squirms more languidly, which for this
+    thing is no loss at all, and every command becomes a small step instead
+    of a jump.
+    """
+    return max(0.2, min(1.0, delivered_hz / DESIGN_HZ))
+
+
 def body_pose(now: float, base: float, home: dict[int, float],
               nod_scale: float = 1.0, amp: float = 1.0) -> dict[int, float]:
     """Everything the arm is doing this instant, as one posture.
@@ -854,6 +884,9 @@ def main() -> None:
     slow_look = 0.0       # worst camera+detect time since the last log line, ms
     slow_send = 0.0       # worst time spent handing a packet to the arm, ms
     late = 0              # ticks that overran their slot
+    writhe_t = 0.0        # the writhe's own clock, which runs slow on a slow link
+    prev_now = 0.0
+    scale = 1.0
     health_at = -1e9      # when the arm was last asked whether it is alive
     unwell_since = None   # when it stopped answering
     declared_dead = False # so the diagnosis is printed once, not every tick
@@ -946,7 +979,8 @@ def main() -> None:
                           coil=coil, base=base, volts=(volts if volts is not None else "?"),
                           awake_for=(now - awake_since if awake else 0.0),
                           look_ms=slow_look, send_ms=slow_send, late=late,
-                          gap_ms=arm.interval_ms)
+                          gap_ms=arm.interval_ms,
+                          link_hz=arm.delivered_hz(), motion=scale)
                 slow_look = slow_send = 0.0
                 late = 0
 
@@ -1047,8 +1081,10 @@ def main() -> None:
                         last_report = now
                     elif now - last_report >= 1.5:  # show that it is still following
                         phase = coil if coil != "out" else "tracking"
+                        hz = arm.delivered_hz()
+                        slow = f"  [link {hz:.1f}/s, writhe at {scale:.0%}]" if scale < 0.95 else ""
                         print(f"  {phase}: face {t.cam_bearing_deg:+5.1f} deg at "
-                              f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg")
+                              f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg{slow}")
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
                     print(f"lost it — searching for {SEARCH_S - (now - last_seen):.0f}s more")
@@ -1101,12 +1137,19 @@ def main() -> None:
 
             # ONE packet per tick, carrying everything at once: the animated
             # posture, the writhe laid over it, and the freshest base heading.
+            # The writhe runs on its own clock. Accumulating a scaled phase
+            # rather than scaling `now` means the rate can change without the
+            # oscillators jumping.
+            scale = motion_scale(arm.delivered_hz())
+            writhe_t += max(0.0, now - prev_now) * scale
+            prev_now = now
+
             home = anim.pose_at(now)
             nod = 0.6 if coil in ("coiling", "coiled") else 1.0
             if time.monotonic() - t0 > tick_due:
                 late += 1  # the work overran its slot; the cadence is slipping
             t_send = time.monotonic()
-            arm.stream(body_pose(now, base, home, nod, amp))
+            arm.stream(body_pose(writhe_t, base, home, nod, amp))
             send_ms = (time.monotonic() - t_send) * 1000
             slow_send = max(slow_send, send_ms)
             pace(tick_due)
