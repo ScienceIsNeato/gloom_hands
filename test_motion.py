@@ -28,7 +28,7 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
 import math
 
 from angles import LIMITS_DEG, NAMES
-from gloom import BASE_SIGN, CAMERA, CAPTURE_SIZE, POSE_COIL_DEG, POSE_POINT_DEG, TICK, WRITHE_TERMS, writhe_deg
+from gloom import BASE_SIGN, NOD_DEPTH, CAMERA, CAPTURE_SIZE, POSE_COIL_DEG, POSE_POINT_DEG, TICK, WRITHE_TERMS, body_pose
 
 MIN_STEPS_PER_CYCLE = 8.0   # below this a sine reads as stepping
 MAX_JOINT_SLEW = 70.0       # deg/s of continuous demand on any one joint
@@ -62,22 +62,25 @@ def main() -> int:
         if not ok:
             bad.append(f"servo {sid}: {slew:.1f} deg/s exceeds {MAX_JOINT_SLEW:.0f}")
 
-    # the writhe must never drive a joint through its soft limit
-    for coiled in (False, True):
+    # the writhe must never drive a joint through its soft limit, in any
+    # posture the animator can put the arm in
+    for home, nod in ((POSE_POINT_DEG, 1.0), (POSE_COIL_DEG, 0.6)):
         for t in [i * 0.05 for i in range(400)]:
-            for sid, deg in writhe_deg(t, 0.0, coiled=coiled).items():
+            pose = body_pose(t, 0.0, home, nod)
+            assert set(pose) == {1, 2, 3, 4, 5, 6}, pose
+            for sid, deg in pose.items():
                 lo, hi = LIMITS_DEG[sid]
                 if not lo - 1e-6 <= deg <= hi + 1e-6:
                     bad.append(f"servo {sid} reaches {deg:.1f} deg, outside {lo}..{hi}")
 
-    # the writhe's resting point must match the pose it is decorating
-    close = writhe_deg(0.0, 0.0)
-    assert set(close) == {1, 2, 3, 6}, close
-    for sid in (1, 2):
-        span = abs(close[sid] - POSE_POINT_DEG[sid])
-        if span > 40:
-            bad.append(f"servo {sid} starts {span:.0f} deg from its pose")
-    assert abs(writhe_deg(0.0, 0.0, coiled=True)[3] - POSE_COIL_DEG[3]) < 12, "coiled wrist drifts"
+    # the oscillators decorate the animated posture rather than replacing it
+    for home in (POSE_POINT_DEG, POSE_COIL_DEG):
+        pose = body_pose(0.0, 0.0, home, 1.0)
+        for sid in (4, 5):
+            if abs(pose[sid] - home[sid]) > 1e-6:
+                bad.append(f"servo {sid} drifted off the animated pose")
+        if abs(pose[3] - home[3]) > NOD_DEPTH + 1e-6:
+            bad.append("wrist nod exceeds its depth")
 
     # --- tracking sense: the arm must turn TOWARD the victim -------------- #
     # A webcam looking at you puts your right on the left of its frame. So a

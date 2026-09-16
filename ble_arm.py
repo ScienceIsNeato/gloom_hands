@@ -80,12 +80,41 @@ class BleArm:
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
+    async def _bind(self, client: BleakClient, label: str) -> None:
+        """Connect, find the writable characteristic, and keep the client."""
+        await client.connect()
+        self._client = client
+        self._char = None
+        for service in client.services:
+            if SERVICE_HINT in service.uuid.lower():
+                for ch in service.characteristics:
+                    if "write" in ch.properties or "write-without-response" in ch.properties:
+                        self._char = ch
+                        break
+        if self._char is None:
+            uuids = [svc.uuid for svc in client.services]
+            await client.disconnect()
+            self._client = None
+            raise RuntimeError(f"no writable characteristic under {SERVICE_HINT}; services: {uuids}")
+        print(f"connected: {label}, char {self._char.uuid}")
+
     async def _connect(self, name_hints: tuple[str, ...], timeout: float, attempts: int = 3) -> None:
+        # FAST PATH: dial the cached address with no discovery at all. Scanning
+        # is what makes a reconnect cost seconds, and the arm goes to sleep and
+        # wakes often enough that those seconds are the whole user experience.
+        addr = _cached_address()
+        if addr:
+            try:
+                await asyncio.wait_for(
+                    self._bind(BleakClient(addr, disconnected_callback=self._on_disconnect), addr),
+                    timeout=6.0,
+                )
+                return
+            except Exception:  # noqa: BLE001 - stale cache or asleep; fall back to a scan
+                self._client, self._char = None, None
+
         device = None
         for attempt in range(1, attempts + 1):
-            # Fast path: directed lookup of the cached address (returns the
-            # moment the arm advertises; stale cache falls through to a scan).
-            addr = _cached_address()
             if addr:
                 device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
             if device is None:
@@ -108,19 +137,10 @@ class BleArm:
                 "script still running (pgrep -fl 'gloom.py|pose.py|teleop.py')?"
             )
         ADDRESS_CACHE.write_text(f"{_sys.platform}\n{device.address}\n")
-        self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
-        await self._client.connect()
-        # The vendor UART service: pick its writable characteristic.
-        for service in self._client.services:
-            if SERVICE_HINT in service.uuid.lower():
-                for ch in service.characteristics:
-                    if "write" in ch.properties or "write-without-response" in ch.properties:
-                        self._char = ch
-                        break
-        if self._char is None:
-            uuids = [s.uuid for s in self._client.services]
-            raise RuntimeError(f"no writable characteristic under {SERVICE_HINT}; services: {uuids}")
-        print(f"connected: {device.name} ({device.address}), char {self._char.uuid}")
+        await self._bind(
+            BleakClient(device, disconnected_callback=self._on_disconnect),
+            f"{device.name} ({device.address})",
+        )
 
     def _on_disconnect(self, _client: BleakClient) -> None:
         # Fast multi-servo moves can brown out the controller's radio; the

@@ -70,7 +70,7 @@ in a corner doing nothing, so its resting state is genuinely off:
 
 | State | What it does |
 | --- | --- |
-| `SEARCH` | sweeps and writhes, looking. Entered at startup and after losing someone. |
+| `SEARCH` | sweeps and writhes, looking. Entered at startup and after losing someone, and runs for `SEARCH_S`. |
 | `TRACK` | follows the face, with the coil and strike cycle. |
 | `SLACK` | stands upright, then **switches every servo off**. No current, no holding torque — limp enough to reposition by hand. |
 
@@ -137,6 +137,14 @@ crossing the sweep at that rate is usually the largest single term. The
 base is a yaw joint, so gravity never opposes it and it is the cheapest
 thing on the arm to move quickly; the shoulder and elbow are where the
 current goes. If the overload alarm ever returns, throttle those, not this.
+
+**The coil and the strike are not animations that play.** Every tick the
+arm sends a single posture: where the animator has eased the shoulder,
+elbow and wrist to, the writhe oscillating on top of that, and the freshest
+tracked heading for the base. Nothing blocks, so someone moving during a
+draw-back or a lunge is followed all the way through it. The first sighting
+after waking gets an entrance instead of a power-on: it rises straight into
+the coil, writhes there for `GREET_HOLD_S`, then strikes.
 
 While locked the base follows the person and the writhe continues; after
 `LOST_AFTER_S` seconds with nobody moving it eases back into the sweep

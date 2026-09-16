@@ -126,6 +126,8 @@ LURCH_MS = 500               # how fast it comes out at you (small = violent; be
 LURCH_OVERSHOOT_JOINT = 3    # 3 = wrist (cheap), 5 = shoulder (what used to sing)
 LURCH_OVERSHOOT_DEG = 14.0   # past the point pose as the lunge lands...
 SETTLE_MS = 450              # ...then settles back over this long
+GREET_HOLD_S = 3.0           # the first sighting: rise into the coil, writhe this long,
+                             # then strike. An entrance, rather than just switching on.
 SHOULDER_SETTLE = False      # only needed when the overshoot is on the shoulder
 
 # ---- the eyes (--eyes) ----------------------------------------------- #
@@ -177,7 +179,7 @@ LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = 
 #
 # Every sighting restarts the SEARCH_S clock, so a room with people in it
 # keeps the arm awake and an empty one lets it go within SEARCH_S.
-SEARCH_S = 10.0         # seconds hunting with nobody in sight before it lets go
+SEARCH_S = 30.0         # seconds hunting with nobody in sight before it lets go
 WAKE_AFTER_S = 2.0      # continuous face needed to wake it (a debounce; 0 to disable)
 WAKE_MS = 2200          # how gently it rises — it has been hanging slack
 PARK_MS = 2500          # and how gently it goes back down
@@ -243,6 +245,24 @@ class Backend:
         except Exception as err:  # noqa: BLE001 - keep hunting; the next tick retries
             print(f"arm: move skipped ({err})")
 
+    def prewarm(self) -> None:
+        """Start reconnecting in the background.
+
+        Called the instant a face appears while asleep, so the link is up by
+        the time the wake threshold passes rather than costing seconds after
+        it. Failures are silent: the wake's first send retries anyway.
+        """
+        if self._servo is not None or not self.released:
+            return
+
+        def go() -> None:
+            try:
+                self._arm.reconnect()
+            except Exception:  # noqa: BLE001 - the wake will try again
+                pass
+
+        threading.Thread(target=go, daemon=True).start()
+
     def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
         """Take the current off every servo, so the arm is limp and can be
         moved by hand.
@@ -270,6 +290,24 @@ class DryBackend:
     eyes and the strike can be tested anywhere."""
 
     released = False
+
+    def prewarm(self) -> None:
+        """Start reconnecting in the background.
+
+        Called the instant a face appears while asleep, so the link is up by
+        the time the wake threshold passes rather than costing seconds after
+        it. Failures are silent: the wake's first send retries anyway.
+        """
+        if self._servo is not None or not self.released:
+            return
+
+        def go() -> None:
+            try:
+                self._arm.reconnect()
+            except Exception:  # noqa: BLE001 - the wake will try again
+                pass
+
+        threading.Thread(target=go, daemon=True).start()
 
     def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
         self.released = True
@@ -435,6 +473,63 @@ class Eyes:
             self._cv2.destroyAllWindows()
 
 
+class Animator:
+    """Eases the arm's posture toward a target, a tick at a time.
+
+    The coil and the lurch used to be a command followed by a sleep, which
+    is exactly why they played like cut scenes: nothing else could happen
+    until they finished, so anyone moving during one was simply not
+    followed. Here each joint gets its own leg of travel with a start time
+    and a duration, and pose_at() only reports where things are right now.
+    The loop never blocks, so the base keeps tracking straight through a
+    coil, a strike and a recovery.
+    """
+
+    def __init__(self, pose: dict[int, float]) -> None:
+        self.cur = {sid: float(v) for sid, v in pose.items()}
+        self._legs: dict[int, tuple[float, float, float, float]] = {}
+
+    def to(self, target: dict[int, float], dur_ms: float, now: float, delay_s: float = 0.0) -> None:
+        """Start moving these joints toward `target`. Later calls override
+        earlier ones from wherever the joint has actually reached, so a
+        change of mind mid-move blends instead of snapping."""
+        for sid, v in target.items():
+            self._legs[sid] = (self.cur.get(sid, float(v)), float(v), now + delay_s, dur_ms / 1000.0)
+
+    def pose_at(self, now: float) -> dict[int, float]:
+        for sid, (a, b, t0, dur) in self._legs.items():
+            if now < t0:
+                continue
+            f = 1.0 if dur <= 0 else min(1.0, (now - t0) / dur)
+            f = f * f * (3.0 - 2.0 * f)  # smoothstep: no corner at either end
+            self.cur[sid] = a + (b - a) * f
+        return dict(self.cur)
+
+    def settled(self, now: float) -> bool:
+        return all(now >= t0 + dur for _, _, t0, dur in self._legs.values())
+
+
+def body_pose(now: float, base: float, home: dict[int, float],
+              nod_scale: float = 1.0, amp: float = 1.0) -> dict[int, float]:
+    """Everything the arm is doing this instant, as one posture.
+
+    `home` is where the animator has the shoulder, elbow and wrist; the
+    writhe oscillates on top of it rather than around a fixed pose, so the
+    creature keeps squirming while it coils, strikes and recovers. One dict
+    means one packet, so no joint waits its turn behind another.
+    """
+    return {
+        6: clamp_deg(6, base),
+        5: clamp_deg(5, home[5]),
+        4: clamp_deg(4, home[4]),
+        3: clamp_deg(3, home[3] + amp * nod_scale * NOD_DEPTH * math.sin(NOD_RATE * now + 2.1)),
+        2: clamp_deg(2, POSE_POINT_DEG[2] + amp * ROLL_DEPTH * math.sin(ROLL_RATE * now)),
+        1: clamp_deg(1, POSE_POINT_DEG[1] + amp * (
+            GROPE_DEPTH * math.sin(GROPE_RATE * now + 1.0)
+            + TREMOR_DEPTH * math.sin(TREMOR_RATE * now))),
+    }
+
+
 def lurch_pose() -> dict[int, float]:
     """The pose the strike lands in: the point pose, with one joint driven
     past it so the lunge arrives with a snap instead of a glide."""
@@ -442,24 +537,6 @@ def lurch_pose() -> dict[int, float]:
     sid = LURCH_OVERSHOOT_JOINT
     pose[sid] = clamp_deg(sid, pose[sid] + LURCH_OVERSHOOT_DEG)
     return pose
-
-
-def writhe_deg(now: float, base: float, coiled: bool = False) -> dict[int, float]:
-    """WRITHE: independent slow oscillators so nothing ever repeats — the
-    gripper gropes, the wrist rolls and nods, the base holds its heading.
-    While coiled the wrist stays curled and only quivers.
-
-    Shared with servo_watch.py so the diagnostic soaks the servos with
-    exactly the motion the hunt uses, not an approximation of it."""
-    wrist_home, nod = (POSE_COIL_DEG[3], NOD_DEPTH * 0.3) if coiled else (POSE_POINT_DEG[3], NOD_DEPTH)
-    return {
-        6: clamp_deg(6, base),
-        1: clamp_deg(1, POSE_POINT_DEG[1]
-                     + GROPE_DEPTH * math.sin(GROPE_RATE * now + 1.0)
-                     + TREMOR_DEPTH * math.sin(TREMOR_RATE * now)),
-        2: clamp_deg(2, POSE_POINT_DEG[2] + ROLL_DEPTH * math.sin(ROLL_RATE * now)),
-        3: clamp_deg(3, wrist_home + nod * math.sin(NOD_RATE * now + 2.1)),
-    }
 
 
 #: Every writhe oscillator, as (servo, label, depth_deg, rate_rad_s). Used by
@@ -520,46 +597,49 @@ def main() -> None:
               f"Ctrl-C to quit.")
 
     t0 = time.monotonic()
+    anim = Animator(POSE_POINT_DEG if awake else POSE_SLACK_DEG)
     heading_offset = 0.0  # phase shift accumulated by snaps
     frozen_until = 0.0
     last_seen = 0.0       # when the eyes last saw someone; also the SEARCH_S clock
     seen_since = None     # when the CURRENT unbroken run of sightings began
     locked = False
+    greeted = False       # has it made its entrance since it last woke?
+    warming = False       # a reconnect already started for this sighting
     last_report = -1e9    # when we last showed the tracking on stdout
-    prev_base = base      # where the base was before the latest tracked update
     last_unload = -1e9    # when the unload was last re-sent while slack
     slept_at = 0.0        # when it last went slack, for the heartbeat
-    coil = "out"          # "out" (pointing) / "coiling" / "coiled" — the strike cycle
-    coil_at = 0.0         # when the next phase of the strike cycle happens
+    coil = "out"          # strike phase: out / coiling / coiled / settling
+    coil_at = 0.0         # when the next phase is due
+    hold_override = None  # replaces the random coiled hold, for the entrance
     try:
         while True:
             now = time.monotonic() - t0
 
-            # LOCK: the eyes keep watching even mid-freeze
             if eyes is not None:
                 if eyes.ended:
                     print("video ended")
                     break
                 seen = eyes.look(first=not locked)
-
-                # --- dormant: watch, and nothing else --------------------- #
                 if seen is None:
                     seen_since = None
                 elif seen_since is None:
                     seen_since = now
+
                 if not awake:
-                    # --- SLACK: unpowered, just watching --------------------- #
+                    # --- SLACK: unpowered, just watching ------------------- #
                     held = 0.0 if seen_since is None else now - seen_since
+                    # Start reconnecting the moment a face appears, so the link
+                    # is up by the time the wake threshold passes instead of
+                    # costing several seconds after it.
+                    if held > 0 and not warming:
+                        arm.prewarm()
+                        warming = True
+                    elif held == 0:
+                        warming = False
                     if held < WAKE_AFTER_S:
-                        # Nothing is acknowledged on this link, so say it again
-                        # occasionally rather than trust one packet all night.
                         if not arm.released and now - last_unload >= SLACK_REASSERT_S:
                             arm.relax(quiet=True)
                             last_unload = now
-                        # Say out loud that it is still asleep, and show a face
-                        # being held — otherwise "why did it stiffen again?" has
-                        # no answer on screen, and the answer is usually that
-                        # whoever went to test it was standing in front of it.
                         if held > 0:
                             print(f"  asleep — face held {held:.1f}s of {WAKE_AFTER_S:.1f}s "
                                   f"needed to wake", end="\r", flush=True)
@@ -569,18 +649,19 @@ def main() -> None:
                             last_report = now
                         time.sleep(TICK)
                         continue
+                    # THE ENTRANCE: rise out of slack straight into the coil,
+                    # writhe there for a beat, then strike. Not a power-on.
                     base = clamp_deg(6, seen[0])
-                    print(f"\nsomething is there ({held:.1f}s of face) — waking up, "
-                          f"servos back on.")
-                    arm.send({**POSE_POINT_DEG, 6: base}, WAKE_MS)
-                    time.sleep(WAKE_MS / 1000 + 0.2)
-                    awake, locked = True, True
-                    last_seen, prev_base, last_report = now, base, now
-                    coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
+                    print(f"\nsomething is there ({held:.1f}s of face) — waking up.")
+                    anim.cur = dict(POSE_SLACK_DEG)  # it is wherever we left it hanging
+                    anim.to(POSE_COIL_DEG, WAKE_MS, now)
+                    awake, locked, greeted, warming = True, True, True, False
+                    last_seen, last_report = now, now
+                    coil, coil_at, hold_override = "coiling", now + WAKE_MS / 1000, GREET_HOLD_S
                     frozen_until = 0.0
                     continue
 
-                # --- SEARCH has run out: park upright and let go ------------ #
+                # --- SEARCH has run out: stand up and cut the power -------- #
                 if now - last_seen > SEARCH_S:
                     print(f"\nnothing for {SEARCH_S:.0f}s — standing up and cutting power.")
                     arm.send(POSE_SLACK_DEG, PARK_MS)
@@ -588,37 +669,32 @@ def main() -> None:
                     arm.relax()
                     print("servos off, Bluetooth link dropped — no current, no holding "
                           "torque. Push it around by hand.")
-                    print("  (it will wake again the moment it sees a face for "
+                    print("  (it will wake again on a face held for "
                           f"{WAKE_AFTER_S:.0f}s, including yours)")
-                    awake, locked, coil = False, False, "out"
+                    awake, locked, greeted, coil = False, False, False, "out"
+                    anim.cur = dict(POSE_SLACK_DEG)
                     seen_since, last_unload, slept_at, last_report = None, now, now, now
                     continue
 
                 if seen is not None:
                     base, t = seen
                     base = clamp_deg(6, base)
-                    if not locked:
-                        print(
-                            f"victim spotted: camera sees {t.cam_range_m:.1f} m at "
-                            f"{t.cam_bearing_deg:+.1f} deg -> base {base:+.1f} deg — snapping"
-                        )
-                        locked = True
-                        last_seen = now
-                        coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
-                        # Fast, but never faster than SNAP_SLEW_DPS: a snap right
-                        # across the sweep at a fixed SNAP_MS is a current spike.
-                        travel = abs(base - prev_base)
-                        dur = max(SNAP_MS, int(1000 * travel / SNAP_SLEW_DPS))
-                        arm.send({6: base}, dur)
-                        time.sleep(dur / 1000 + 0.1)
-                        prev_base = base
-                        last_report = now
-                        continue
                     last_seen = now
-                    prev_base = base
-                    if now - last_report >= 1.5:  # show that it is still following
-                        state = "coiled" if coil != "out" else "tracking"
-                        print(f"  {state}: face {t.cam_bearing_deg:+5.1f} deg at "
+                    if not locked:
+                        locked = True
+                        print(f"victim spotted: {t.cam_range_m:.1f} m at "
+                              f"{t.cam_bearing_deg:+.1f} deg -> base {base:+.1f} deg")
+                        if not greeted:
+                            greeted = True
+                            anim.to(POSE_COIL_DEG, COIL_MS, now)
+                            coil = "coiling"
+                            coil_at, hold_override = now + COIL_MS / 1000, GREET_HOLD_S
+                        else:
+                            coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
+                        last_report = now
+                    elif now - last_report >= 1.5:  # show that it is still following
+                        phase = coil if coil != "out" else "tracking"
+                        print(f"  {phase}: face {t.cam_bearing_deg:+5.1f} deg at "
                               f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg")
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
@@ -626,61 +702,61 @@ def main() -> None:
                     locked = False
                     heading_offset = rephase(now, base)
                     if coil != "out":
-                        arm.send({sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}, 1500)
-                        coil = "out"
+                        anim.to({sid: POSE_POINT_DEG[sid] for sid in (5, 4, 3)}, 1500, now)
+                        coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
 
+            # FREEZE: it goes utterly still — but never stops watching you.
+            # Stopping the writhe is the creepy part; stopping the tracking
+            # just looked broken.
             if now < frozen_until:
-                time.sleep(TICK)
-                continue
-            if random.random() < FREEZE_CHANCE:
-                frozen_until = now + random.uniform(*FREEZE_S)  # ...it heard something
-                continue
+                amp = 0.0
+            else:
+                amp = 1.0
+                if random.random() < FREEZE_CHANCE:
+                    frozen_until = now + random.uniform(*FREEZE_S)
 
             if not locked:
                 base = sweep_deg(now, heading_offset)
                 if random.random() < SNAP_CHANCE:
-                    heading_offset += random.uniform(-2.2, 2.2)
-                    arm.send({6: clamp_deg(6, base)}, SNAP_MS)  # violent re-aim
-                    time.sleep(SNAP_MS / 1000 + 0.1)
-                    continue
-            elif now >= coil_at:
-                # STRIKE cycle: out -> folding (forearm) -> coiling (shoulder
-                # leans back) -> coiled (hold, still tracking) -> LURCH -> out.
-                # The two halves are deliberately staggered: folding the elbow
-                # and leaning the shoulder together is what browned out the
-                # supply, and a creature drawing back does it in that order
-                # anyway.
+                    heading_offset += random.uniform(-2.2, 2.2)  # a sudden re-aim
+            elif now >= coil_at and now >= frozen_until:
+                # THE STRIKE, as scheduling rather than choreography. Each phase
+                # only hands the animator a target and a time; the tick below
+                # keeps sending, so the base follows the victim all the way
+                # through the draw, the lunge and the recovery.
                 if coil == "out":
                     print("...drawing back")
-                    arm.send({sid: POSE_COIL_DEG[sid] for sid in (4, 3)}, COIL_MS)
-                    coil, coil_at = "folding", now + COIL_STAGGER_S
-                elif coil == "folding":
-                    arm.send({5: POSE_COIL_DEG[5], 6: clamp_deg(6, base)}, COIL_MS)
-                    coil, coil_at = "coiling", now + COIL_MS / 1000
+                    anim.to({4: POSE_COIL_DEG[4], 3: POSE_COIL_DEG[3]}, COIL_MS, now)
+                    anim.to({5: POSE_COIL_DEG[5]}, COIL_MS, now, delay_s=COIL_STAGGER_S)
+                    coil = "coiling"
+                    coil_at = now + COIL_STAGGER_S + COIL_MS / 1000
                 elif coil == "coiling":
-                    coil, coil_at = "coiled", now + random.uniform(*COIL_HOLD_S)
-                else:
+                    coil = "coiled"
+                    coil_at = now + (hold_override or random.uniform(*COIL_HOLD_S))
+                    hold_override = None
+                elif coil == "coiled":
                     print("LURCH")
-                    arm.send({**lurch_pose(), 6: clamp_deg(6, base)}, LURCH_MS)
-                    time.sleep(LURCH_MS / 1000)
-                    # Let the snapped joint relax back to the pose it overshot.
-                    relax_sid = LURCH_OVERSHOOT_JOINT
-                    if SHOULDER_SETTLE or relax_sid != 5:
-                        arm.send({relax_sid: POSE_POINT_DEG[relax_sid]}, SETTLE_MS)
+                    anim.to(lurch_pose(), LURCH_MS, now)
+                    coil, coil_at = "settling", now + LURCH_MS / 1000
+                else:
+                    sid = LURCH_OVERSHOOT_JOINT
+                    anim.to({sid: POSE_POINT_DEG[sid]}, SETTLE_MS, now)
                     coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
-                    continue
 
-            # WRITHE: independent slow oscillators so nothing ever repeats.
-            arm.send(writhe_deg(now, base, coiled=coil != "out"), int(TICK * 1000) + 80)
+            # ONE packet per tick, carrying everything at once: the animated
+            # posture, the writhe laid over it, and the freshest base heading.
+            home = anim.pose_at(now)
+            nod = 0.6 if coil in ("coiling", "coiled") else 1.0
+            arm.send(body_pose(now, base, home, nod, amp), int(TICK * 1000) + 80)
             time.sleep(TICK)
     except KeyboardInterrupt:
         pass
     finally:
         print("\nreleasing...")
         try:
-            arm.send(POSE_REST_DEG, 2500)
-            time.sleep(2.7)
-            arm.relax()  # rest is a POSE, not a rest: unload or it holds all night
+            arm.send(POSE_SLACK_DEG, PARK_MS)
+            time.sleep(PARK_MS / 1000 + 0.2)
+            arm.relax()  # a pose is not a rest: unload, or it holds all night
         except Exception as err:  # noqa: BLE001
             print(f"arm: could not park it ({err}); power-cycle it to relax")
         if eyes is not None:

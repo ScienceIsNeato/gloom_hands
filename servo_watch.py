@@ -63,7 +63,7 @@ from angles import NAMES, servo_units, units_to_deg
 from gloom import (
     COIL_EVERY_S, COIL_HOLD_S, COIL_MS, COIL_STAGGER_S, LURCH_MS, LURCH_OVERSHOOT_DEG,
     POSE_COIL_DEG, POSE_POINT_DEG, POSE_REST_DEG, SETTLE_MS, SHOULDER_SETTLE, TICK,
-    lurch_pose, sweep_deg, writhe_deg,
+    Animator, body_pose, lurch_pose, sweep_deg,
 )
 
 JOINTS = (1, 2, 3, 4, 5, 6)
@@ -177,6 +177,7 @@ class Watch:
         print("Listen for the tone. Ctrl-C the moment you hear it.\n")
         self.send({**POSE_POINT_DEG, 6: 0.0}, 2500)
         time.sleep(2.7)
+        anim = Animator(POSE_POINT_DEG)
         coil, coil_at, strikes, next_sample, over = "out", 4.0, 0, 0.0, 0
         while True:
             now = time.monotonic() - self.t0
@@ -186,33 +187,31 @@ class Watch:
 
             if now >= coil_at:
                 if coil == "out":
-                    self.note("coil-fold")
-                    self.send({sid: POSE_COIL_DEG[sid] for sid in (4, 3)}, COIL_MS)
-                    coil, coil_at = "folding", now + COIL_STAGGER_S
-                elif coil == "folding":
-                    self.note("coil-lean")
-                    self.send({5: POSE_COIL_DEG[5], 6: base}, COIL_MS)
-                    coil, coil_at = "coiling", now + COIL_MS / 1000
+                    self.note("coil")
+                    anim.to({4: POSE_COIL_DEG[4], 3: POSE_COIL_DEG[3]}, COIL_MS, now)
+                    anim.to({5: POSE_COIL_DEG[5]}, COIL_MS, now, delay_s=COIL_STAGGER_S)
+                    coil = "coiling"
+                    coil_at = now + COIL_STAGGER_S + COIL_MS / 1000
                 elif coil == "coiling":
                     coil, coil_at = "coiled", now + random.uniform(*COIL_HOLD_S)
-                else:
+                elif coil == "coiled":
                     strikes += 1
                     self.note("lurch")
-                    strike = lurch_pose()
-                    self.send({**strike, 6: base}, LURCH_MS)
-                    self.watch_through("lurching", LURCH_MS / 1000)
-                    self.note("arrive")
-                    if SHOULDER_SETTLE:
-                        self.send({5: POSE_POINT_DEG[5]}, SETTLE_MS)
-                    self.watch_through("arriving", SETTLE_MS / 1000 + 0.6)
                     print(f"  -- strike {strikes} at t={now:.0f}s --")
+                    anim.to(lurch_pose(), LURCH_MS, now)
+                    coil, coil_at = "settling", now + LURCH_MS / 1000
+                else:
+                    self.note("arrive")
+                    sid = LURCH_OVERSHOOT_JOINT
+                    anim.to({sid: POSE_POINT_DEG[sid]}, SETTLE_MS, now)
                     coil, coil_at = "out", now + random.uniform(*COIL_EVERY_S)
-                    continue
 
-            self.send(writhe_deg(now, base, coiled=coil != "out"), int(TICK * 1000) + 80)
+            home = anim.pose_at(now)
+            nod = 0.6 if coil in ("coiling", "coiled") else 1.0
+            self.send(body_pose(now, base, home, nod), int(TICK * 1000) + 80)
 
             if now >= next_sample:
-                phase = "extended" if coil == "out" else "coiled"
+                phase = {"out": "extended", "settling": "arriving"}.get(coil, coil)
                 sid, worst = self.sample(phase)
                 if abort_deg and worst > abort_deg:
                     over += 1

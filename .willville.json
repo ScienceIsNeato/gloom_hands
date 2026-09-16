@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "When nobody is around the hand now stands up straight and switches itself off completely — no power, you can push it around by hand. It tells the arm to let go several times over, since the radio never confirms anything.",
-    "direction": "Leave it running in the corner and see whether it really stays cold and quiet all evening",
-    "last_update": "2026-09-15T00:00:00Z"
+    "status": "Smoothed out how the hand moves — it used to freeze mid-routine and ignore you until each move finished, now it keeps following you through everything. Also gave it a proper entrance when it first spots someone, and made waking up from sleep much quicker.",
+    "direction": "Try it on the arm and see whether the entrance reads well and the reconnect is finally fast enough",
+    "last_update": "2026-09-16T00:00:00Z"
   }
 }
