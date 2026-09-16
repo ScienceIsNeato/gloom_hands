@@ -151,6 +151,10 @@ SHOULDER_SETTLE = False      # only needed when the overshoot is on the shoulder
 # earns its keep when the lens genuinely cannot live there. To say otherwise,
 # measure from the pivot: a camera two feet to the arm's LEFT is y_m=+0.61,
 # one a room away facing back at the arm is x_m=4.57, yaw_deg=180.
+# hfov_deg is the lens's HORIZONTAL field of view. Take it from the webcam's
+# spec sheet — wide-angle ones are commonly 90 to 120, and leaving it at 60
+# does not break tracking (the frame is mapped onto the sweep either way) but
+# it does make every reported distance wrong. --hfov overrides it for a run.
 CAMERA = dict(x_m=0.0, y_m=0.0, yaw_deg=0.0, hfov_deg=60.0, mirrored=False)
 PERSON_HEIGHT_M = 1.7
 VIDEO_SRC = "0"
@@ -691,12 +695,20 @@ def main() -> None:
     p.add_argument("--detector", default=DETECTOR, choices=("background", "motion", "face", "yunet", "haar", "person"),
                    help="background subtraction (default), frame differencing, face (YuNet, or Haar without its model), or HOG person")
     p.add_argument("--show", action="store_true", help="open a window showing what the eyes see")
+    p.add_argument("--hfov", type=float, metavar="DEG",
+                   help="camera horizontal field of view; wide-angle webcams are often 90-120")
+    p.add_argument("--mirrored", action="store_true", help="the camera image is left-right flipped")
     p.add_argument("--log", default="gloom.log", metavar="FILE",
                    help="append a flight recorder to this file (default gloom.log; '' to disable)")
     p.add_argument("--flip", action="store_true",
                    help="invert BASE_SIGN for this run — use it to settle which way servo 6 turns")
     a = p.parse_args()
 
+    if a.hfov:
+        CAMERA["hfov_deg"] = a.hfov
+        print(f"eyes: camera field of view set to {a.hfov:.0f} deg")
+    if a.mirrored:
+        CAMERA["mirrored"] = True
     if a.flip:
         globals()["BASE_SIGN"] = -BASE_SIGN
         print(f"eyes: BASE_SIGN flipped to {BASE_SIGN:+.0f} for this run")

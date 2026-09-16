@@ -4,7 +4,12 @@ A detector answers "is there a person in THIS frame?" with no memory, so
 its output flickers whenever a face turns or a blob splits. That is not
 how people move. ``Tracker`` keeps one track alive across frames:
 
-* a hit from the primary detector STARTS the track;
+* a hit from the primary detector STARTS the track, and so does the
+  secondary when the primary has come up empty — a face at the edge of a
+  wide lens is stretched and turned away, and a face detector simply will
+  not see it, but the blob detector sees anything person-shaped anywhere in
+  the frame. Noticing someone at all beats knowing exactly where their
+  face is;
 * later primary hits near where the track is expected UPDATE it (position,
   size, velocity); hits far away are ignored unless they persist;
 * when the primary misses, a hit from the secondary detector (for a face
@@ -50,6 +55,8 @@ class Tracker:
         primary,
         secondary=None,
         coast_s: float = 2.5,
+        acquire_on_secondary: bool = True,
+        min_secondary_frac: float = 0.12,
         gate_frac: float = 0.2,
         size_alpha: float = 0.3,
         pos_alpha: float = 0.75,   # how much of each new reading to take; higher = less lag
@@ -59,6 +66,8 @@ class Tracker:
         self.primary = primary
         self.secondary = secondary
         self.coast_s = coast_s
+        self.acquire_on_secondary = acquire_on_secondary
+        self.min_secondary_frac = min_secondary_frac
         self.gate_frac = gate_frac
         self.size_alpha = size_alpha
         self.pos_alpha = pos_alpha
@@ -114,6 +123,19 @@ class Tracker:
         t = self._track
         return t.x if t is None else t.x + t.vx * min(dt, 0.5)
 
+    def _rescale(self, d: Detection) -> Detection:
+        """A secondary detection expressed in the primary's pixel frame, since
+        the two may be running at different scales."""
+        if not d.frame_w or not self.primary.frame_w or d.frame_w == self.primary.frame_w:
+            return d
+        k = self.primary.frame_w / d.frame_w
+        return Detection(
+            x=d.x * k, top=d.top * k, bottom=d.bottom * k,
+            frame_w=self.primary.frame_w, frame_h=self.primary.frame_h,
+            weight=d.weight, real_height_m=d.real_height_m,
+            width_px=(d.width_px * k if d.width_px else None),
+        )
+
     def _start(self, d: Detection, now: float) -> None:
         self._track = _Track(d.x, d.top, d.bottom, d.width_px, d.real_height_m, 0.0, now, now, 1)
         self._far_hits = 0
@@ -150,6 +172,18 @@ class Tracker:
                 self._start(hit, now)
                 self.last_source = "primary"
                 return self._report(now)
+            # The primary is the precise one and it has blind spots. Let the
+            # secondary open a track when the primary found nothing at all,
+            # provided the blob is big enough to be a person rather than a
+            # curtain. Requiring a face to START tracking meant anyone the face
+            # detector could not resolve was invisible, however obvious they
+            # were to look at.
+            if self.secondary is not None and self.acquire_on_secondary:
+                s = self.secondary.detect(frame_bgr)
+                if s is not None and s.frame_h and s.height_px >= self.min_secondary_frac * s.frame_h:
+                    self._start(self._rescale(s), now)
+                    self.last_source = "secondary"
+                    return self._report(now)
             self.last_source = ""
             return None
 

@@ -378,15 +378,18 @@ def yunet_model_path() -> str | None:
 
 class YuNetDetector:
     """cv2.FaceDetectorYN (YuNet). Returns the highest-scoring face.
-    ``score_threshold`` 0.6 is eager on purpose for a static room; raise
-    it if it ever locks onto a poster. ``face_height_m`` is what its box
+    ``score_threshold`` is deliberately low. A wide-angle lens stretches and
+    turns a face near the frame edge, and the score falls off well before the
+    face becomes unrecognisable to a person looking at it; the cost of a
+    false positive here is only that the arm wakes up. Raise it if it ever
+    locks onto a poster. ``face_height_m`` is what its box
     spans, roughly hairline to chin: ~0.2 m on an adult."""
 
     def __init__(
         self,
         scale: float = 0.5,
         model: str | None = None,
-        score_threshold: float = 0.6,
+        score_threshold: float = 0.45,
         nms_threshold: float = 0.3,
         face_height_m: float = 0.2,
         debug: bool = False,

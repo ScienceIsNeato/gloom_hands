@@ -145,6 +145,20 @@ genuinely off; one that springs back is still powered.
 ./gloom.py --eyes --video-src 1    # a different camera, or a video file
 ```
 
+**A face detector alone is not enough on a wide lens.** Near the frame edge
+a face is stretched by the optics and turned away from the camera, and
+YuNet stops seeing it well before it stops being obvious to look at. So the
+tracker will open a track on the *background blob* when the face detector
+comes up empty, provided the blob is person-sized. Precision about where
+someone's face is matters less than noticing they are there at all; once
+a track exists, a face reasserts itself the moment one is visible.
+
+Set `hfov_deg` in `CAMERA` from the webcam's spec sheet, or pass `--hfov`.
+Wide-angle webcams are commonly 90 to 120 degrees. Getting it wrong does
+not break tracking, because the frame is mapped onto the sweep either way,
+but every distance in the log scales with it: a face that reads 3.7 m at an
+assumed 60 degrees reads 2.1 m at 90.
+
 `eyes.py` feeds the preview the same `CAMERA` settings `gloom.py` uses.
 Detectors: `face` (default; YuNet when its model is in `vision/models/`,
 else Haar cascades), `background` (learns the static scene, anything that
