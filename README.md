@@ -105,6 +105,7 @@ genuinely off; one that springs back is still powered.
 ./eyes.py                          # just look: preview window, no arm (d cycles detectors, s snapshots)
 ./eyes.py --detector background    # or motion (legacy diff), person (HOG); default is face
 ./gloom.py --eyes                  # search, track, and go slack in an empty room
+./gloom.py                         # blind hunt, no camera — Esc or q to stop
 ./gloom.py --eyes --dry --show     # no arm: print the base headings, show what it sees
 ./gloom.py --eyes --flip           # try the other BASE_SIGN for one run
 ./gloom.py --eyes --video-src 1    # a different camera, or a video file

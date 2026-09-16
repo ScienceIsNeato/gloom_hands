@@ -55,6 +55,7 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
 import argparse
 import math
 import random
+import sys
 import threading
 import time
 
@@ -63,7 +64,13 @@ from angles import clamp_deg, servo_units
 # ---- the posture (TUNE THESE FIRST, in degrees) ---------------------- #
 POSE_POINT_DEG = {
     5: 36.0,   # shoulder: leaned forward
-    4: -48.0,  # elbow: bent back to bring the forearm level
+    # The elbow was at -48, which left the hand hanging about 20 degrees below
+    # horizontal at the end of a lurch: overextended to look at, and the worst
+    # case for the shoulder, which is why it sometimes tripped the alarm right
+    # there. Raising it brings the hand flat AND pulls the mass inboard, so it
+    # is both the cosmetic fix and the load fix. (Negative bends the forearm
+    # down; less negative raises it.)
+    4: -28.0,  # elbow: forearm level, hand straight out
     3: 12.0,   # wrist bend: aimed at the viewer
     2: 0.0,    # wrist roll: knuckles up
     1: 12.0,   # gripper: half-open, ready to grab
@@ -473,6 +480,68 @@ class Eyes:
             self._cv2.destroyAllWindows()
 
 
+class Keys:
+    """Non-blocking keyboard, so Esc can stop the hunt with no window open.
+
+    Only the preview window could take a keypress before, which left the
+    blind hunt reachable by Ctrl-C alone. This puts the terminal in cbreak
+    so keys arrive without Enter, and restores it on the way out. Ctrl-C
+    keeps working throughout: cbreak leaves signal generation enabled,
+    unlike raw mode. A terminal that is not a tty (piped input, a service)
+    simply reports no keys rather than failing.
+    """
+
+    def __init__(self) -> None:
+        self._fd = None
+        self._saved = None
+        self._termios = None
+        if not sys.stdin.isatty():
+            return
+        if sys.platform == "win32":
+            self._fd = "win32"
+            return
+        import termios
+        import tty
+
+        self._termios = termios
+        self._fd = sys.stdin.fileno()
+        self._saved = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+
+    def pressed(self) -> str:
+        """Everything typed since the last call, without blocking."""
+        if self._fd is None:
+            return ""
+        if self._fd == "win32":
+            import msvcrt
+
+            out = ""
+            while msvcrt.kbhit():
+                out += msvcrt.getwch()
+            return out
+        import select
+
+        out = ""
+        while select.select([sys.stdin], [], [], 0)[0]:
+            out += sys.stdin.read(1)
+        return out
+
+    def quit_requested(self) -> bool:
+        """Esc or q. An arrow key also starts with Esc but carries a '['
+        right behind it, so ignore anything that looks like a sequence."""
+        chunk = self.pressed()
+        if not chunk:
+            return False
+        if "q" in chunk.lower():
+            return True
+        return "\x1b" in chunk and "[" not in chunk
+
+    def close(self) -> None:
+        if self._saved is not None and self._termios is not None:
+            self._termios.tcsetattr(self._fd, self._termios.TCSADRAIN, self._saved)
+            self._saved = None
+
+
 class Animator:
     """Eases the arm's posture toward a target, a tick at a time.
 
@@ -590,11 +659,12 @@ def main() -> None:
     arm.send({**POSE_POINT_DEG, 6: base}, 2500)
     time.sleep(2.7)
     awake = True
+    keys = Keys()
     if eyes is None:
-        print("hunting. Ctrl-C to release the victim.")
+        print("hunting. Esc or q to stop (Ctrl-C works too).")
     else:
         print(f"searching ({eyes.kind}). Nothing within {SEARCH_S:.0f}s and it goes slack. "
-              f"Ctrl-C to quit.")
+              f"Esc or q to stop.")
 
     t0 = time.monotonic()
     anim = Animator(POSE_POINT_DEG if awake else POSE_SLACK_DEG)
@@ -614,6 +684,9 @@ def main() -> None:
     try:
         while True:
             now = time.monotonic() - t0
+            if keys.quit_requested():
+                print("\nstopping.")
+                break
 
             if eyes is not None:
                 if eyes.ended:
@@ -759,6 +832,7 @@ def main() -> None:
             arm.relax()  # a pose is not a rest: unload, or it holds all night
         except Exception as err:  # noqa: BLE001
             print(f"arm: could not park it ({err}); power-cycle it to relax")
+        keys.close()
         if eyes is not None:
             eyes.close()
 
