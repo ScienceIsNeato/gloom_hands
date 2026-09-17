@@ -311,6 +311,15 @@ BASE_OVERLAP = 1.7      # the base's travel time as a multiple of that interval.
 VOLTS_EVERY_S = 1.0     # how often to ask (each read is a USB round trip)
 UNREACHABLE_S = 8.0     # unresponsive this long and we call it: the servos have latched
 PARK_MS = 2500          # and how gently it goes back down
+# Whether going to sleep also drops the Bluetooth link. Dropping it was a
+# guess — that CMD_SERVO_STOP does not release this board and only the link
+# dying does — and that guess was never actually confirmed, whereas the
+# reconnect trouble it caused was seen repeatedly. So: keep the link, and
+# simply repeat the unload while asleep. If the arm turns out to hold its
+# pose through a sleep, the guess was right after all and this goes back to
+# True; ./relax.py --stay settles it in a few seconds.
+SLEEP_DROPS_LINK = False
+
 SLACK_REASSERT_S = 60.0 # re-send the unload this often while asleep. BLE writes are
                         # never acknowledged, so this is the cheap insurance against
                         # the one packet that matters going missing.
@@ -360,6 +369,7 @@ class Backend:
             self._servo = None
         self.released = False   # True once the current is off and, on BLE, the link dropped
         self._last_errors = 0   # write-error count at the previous health check
+        self.link_dropped = False   # did WE disconnect, or did it fall over?
         self._last_send = None  # when the previous packet went out
         self.interval_ms = TICK * 1000.0  # measured spacing between packets
         self._sent_units: dict[int, int] = {}  # last value actually commanded per servo
@@ -413,6 +423,7 @@ class Backend:
 
     def send(self, moves_deg: dict[int, float], dur_ms: int, _measured: bool = False) -> None:
         self.released = False
+        self.link_dropped = False
         if not _measured:
             self._sent_units.clear()  # a one-off move invalidates what we think it holds
         units = {sid: servo_units(sid, d) for sid, d in moves_deg.items()}
@@ -465,8 +476,8 @@ class Backend:
         the time the wake threshold passes rather than costing seconds after
         it. Failures are silent: the wake's first send retries anyway.
         """
-        if self._servo is not None or not self.released:
-            return
+        if self._servo is not None or not self.link_dropped:
+            return   # nothing to reconnect: the link was never dropped
 
         def go() -> None:
             try:
@@ -480,12 +491,13 @@ class Backend:
         """Take the current off every servo, so the arm is limp and can be
         moved by hand.
 
-        Over Bluetooth this also DROPS THE LINK. The unload command alone
-        was observed not to release this board — the arm only went limp when
-        the process exited and the connection died with it. So the link is
-        what actually does it, and the next command reconnects on its own.
+        `drop_link` additionally disconnects, which was once thought to be
+        the only thing that truly releases this board. Off by default now:
+        the reconnect it forced caused more trouble than it was ever shown
+        to solve.
         """
         self.released = True
+        self.link_dropped = bool(drop_link) and self._servo is None
         self._sent_units.clear()
         try:
             if self._servo is not None:
@@ -504,6 +516,7 @@ class DryBackend:
     the sleep cycle can all be exercised anywhere."""
 
     released = False
+    link_dropped = False
     interval_ms = TICK * 1000.0
 
     def delivered_hz(self) -> float:
@@ -523,11 +536,13 @@ class DryBackend:
 
     def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
         self.released = True
+        self.link_dropped = bool(drop_link)
         if not quiet:
-            print("  (servos off, link dropped, limp)")
+            print(f"  (servos off, limp{', link dropped' if drop_link else ''})")
 
     def send(self, moves_deg: dict[int, float], dur_ms: int, _measured: bool = False) -> None:
         self.released = False
+        self.link_dropped = False
         if {3, 4, 5} & moves_deg.keys():
             joints = " ".join(f"s{sid}={d:+.0f}" for sid, d in sorted(moves_deg.items()))
             print(f"  pose -> {joints} over {dur_ms} ms")
@@ -1162,7 +1177,7 @@ def main() -> None:
             time.sleep(PARK_MS / 1000 + 0.2)
         except Exception as err:  # noqa: BLE001 - park is best-effort; the unload matters
             log.event(now, "park_failed", err=type(err).__name__)
-        arm.relax()
+        arm.relax(drop_link=SLEEP_DROPS_LINK)
         wp.forget()
         return now + cooldown
 
@@ -1201,7 +1216,7 @@ def main() -> None:
             # the link on purpose, and the monitor was then declaring the arm
             # dead for being disconnected, reconnecting it, and starting over:
             # a loop of our own making that never let it rest.
-            if now - health_at >= 2.0 and not arm.released:
+            if now - health_at >= 2.0 and not arm.link_dropped:
                 health_at = now
                 ok, why = arm.health()
                 if ok:
@@ -1223,7 +1238,7 @@ def main() -> None:
                               last_coil=coil, volts=(volts if volts else "?"))
                 if ok:
                     declared_dead = False
-            elif arm.released:
+            elif arm.link_dropped:
                 unwell_since, declared_dead = None, False
 
             if now - last_sample >= 5.0:
@@ -1276,7 +1291,7 @@ def main() -> None:
                         pace(tick_due)
                         continue
                     if held < WAKE_AFTER_S:
-                        if not arm.released and now - last_unload >= SLACK_REASSERT_S:
+                        if not arm.link_dropped and now - last_unload >= SLACK_REASSERT_S:
                             arm.relax(quiet=True)
                             last_unload = now
                         if held > 0:

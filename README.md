@@ -198,7 +198,16 @@ before the power is cut, chosen so that letting go barely moves it: vertical
 and balanced over the base. Anything reaching would fall. Tune it with
 `./pose.py slack`, then run `./relax.py` and see how far it actually sags.
 
-**Over Bluetooth, going slack means dropping the link.** The documented
+**Going slack no longer drops the Bluetooth link** (`SLEEP_DROPS_LINK`).
+Dropping it was a guess — that `CMD_SERVO_STOP` does not release this board
+and only the link dying does — and that guess was never confirmed, while the
+reconnect trouble it caused was seen repeatedly: the health monitor read the
+deliberate disconnect as the arm having died and reconnected it in a loop.
+The unload is simply repeated while asleep instead. `./relax.py --stay`
+settles whether the original guess was right; if the arm holds its pose
+through a sleep, set it back to True.
+
+**The older note, kept because it may still be true:** The documented
 unload command, `CMD_SERVO_STOP`, appears to do nothing on this board: the
 arm only ever went limp when the process exited and the connection died
 with it. So sleeping sends the unload and then disconnects, and the next
