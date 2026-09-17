@@ -331,6 +331,14 @@ forward, the elbow backward and the wrist forward, so the joint angles do
 NOT simply add up, and every attempt to infer the geometry from the tuned
 poses contradicted itself until `calibrate.py` settled it on the hardware.
 
+A gesture that runs along the arm as a wave has to be checked against the
+hand, not just admired in joint angles. Drawing back it is fine, because
+each joint's travel is stretched so they all arrive together and the hand
+dips only 1.3in. Striking, the same trick was disastrous: the shoulder
+swinging forward a beat early, while the arm is still folded behind it,
+scooped the gripper 5.1 inches *below* where it started. The strike now
+moves as one, and the crack comes from the wrist overshooting as it lands.
+
 ## Servo map (xArm 1S)
 
 ```

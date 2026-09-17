@@ -191,7 +191,15 @@ COIL_MS = 2400               # how slowly it draws back (menacing = slow, and ch
 COIL_STAGGER_S = 0.55        # beat between joints while drawing back
 # One tick: waypoints are dispatched once per tick, so a finer stagger than
 # that just puts two joints in the same packet and the whip disappears.
-LURCH_STAGGER_S = TICK       # beat between joints while striking
+# The strike is the exception: its stagger has to be nearly zero. Starting
+# the shoulder a beat ahead of the elbow swings it forward while the arm is
+# still folded behind it, and the hand plunges — measured through the
+# gesture, a one-tick stagger drops the gripper 5.1 INCHES below where it
+# started, scooping down and back up instead of shooting out. The whip does
+# not need it: LURCH_OVERSHOOT_JOINT already snaps the wrist past the pose as
+# the lunge lands, and that is where the crack comes from.
+#   0.00s -> hand dips 0.3in    0.10s -> 2.3in    0.22s -> 5.4in
+LURCH_STAGGER_S = 0.0        # beat between joints while striking
 COIL_ORDER = (3, 4, 5)       # wrist, elbow, shoulder — the wave travels inward
 LURCH_ORDER = (5, 4, 3)      # and outward again to strike
 COIL_HOLD_S = (2.0, 5.0)     # how long it stays coiled, still tracking
