@@ -61,6 +61,7 @@ import threading
 import time
 
 from angles import clamp_deg, servo_units, units_to_deg
+from kinematics import arm_for, hand_at
 
 # ---- the posture (TUNE THESE FIRST, in degrees) ---------------------- #
 POSE_POINT_DEG = {
@@ -892,26 +893,22 @@ def undulate_at(t: float, coiled: bool) -> tuple[float, float]:
 
 
 def aim_pose(t: float, elevation_deg: float, coiled: bool) -> dict[int, float]:
-    """The three pitch joints: the arm coiling freely underneath, and the
-    wrist taking whatever is left so the hand keeps pointing at the face.
+    """The three pitch joints, solved from where the HAND should be.
 
-    While drawn back the hand cannot reach the face — the arm is folded
-    behind itself — so it holds the pitch the coil pose was dialled to
-    instead, and resumes aiming when it comes back out. It still OPPOSES the
-    arm either way: the shoulder and elbow carry the hand's pitch with them,
-    so a wrist sitting at a fixed angle means the palm just points wherever
-    the arm last swung it. Left over is not the same as left alone.
+    This is the whole difference. Commanding angles and letting the hand end
+    up wherever they put it is what threw the gripper from the table top to
+    straight overhead. Asking for a hand position and solving back to angles
+    means the height can simply be held, and the shoulder, elbow and wrist
+    each do whatever that requires — including opposing each other, which
+    they now will without being told to.
     """
-    base_pose = POSE_COIL_DEG if coiled else reach_pose()
-    ds, de = undulate_at(t, coiled)
-    sh = clamp_deg(5, base_pose[5] + ds)
-    el = clamp_deg(4, base_pose[4] + de)
-    if coiled:
-        # the pitch the coiled pose was tuned to, held against the undulation
-        want = POSE_COIL_DEG[5] + POSE_COIL_DEG[4] + POSE_COIL_DEG[3]
-    else:
-        want = HAND_AIM_ZERO + HAND_AIM_GAIN * elevation_deg
-    return {5: sh, 4: el, 3: clamp_deg(3, want - sh - el)}
+    reach, height, pitch = hand_target(t, elevation_deg, coiled)
+    solved = arm_for(reach, height, pitch)
+    if solved is None:      # asked for somewhere the arm cannot go
+        base = POSE_COIL_DEG if coiled else reach_pose()
+        return {5: base[5], 4: base[4], 3: base[3]}
+    sh, el, wr = solved
+    return {5: clamp_deg(5, sh), 4: clamp_deg(4, el), 3: clamp_deg(3, wr)}
 
 #: Joints the strike also drives. Their writhe has to oscillate around
 #: whatever posture the strike has put them in, not around a fixed pose.
@@ -978,6 +975,35 @@ def lurch_pose() -> dict[int, float]:
     return pose
 
 
+#: Where the tuned poses actually put the hand — reach, height, pitch — worked
+#: out from the measured link lengths. Both sit at almost the same height
+#: (6.6in reaching, 5.9in coiled), so drawing back is already a straight
+#: retraction rather than a hoist. That is the thing worth preserving: hold
+#: the height, and let the body breathe by gliding the hand along it.
+HAND_REST = hand_at(reach_pose()[5], reach_pose()[4], reach_pose()[3])
+HAND_COIL = hand_at(POSE_COIL_DEG[5], POSE_COIL_DEG[4], POSE_COIL_DEG[3])
+
+GLIDE_IN = 0.7          # inches the hand draws in and out as it breathes. This is
+                        # now the ONLY thing that moves the arm while it waits, so it
+                        # is also the whole "how alive does it look" dial. Bigger
+                        # swings the body more; the head stays level regardless.
+GLIDE_COILED = 0.35     # less of it while drawn back
+
+
+def hand_target(t: float, elevation_deg: float, coiled: bool) -> tuple[float, float, float]:
+    """Where the hand should be right now: reach, height, pitch.
+
+    Height is simply held. Everything the body does to look alive happens
+    along that level, which is what makes it read as a head on a neck rather
+    than a weight on a stick.
+    """
+    rest = HAND_COIL if coiled else HAND_REST
+    swing = GLIDE_IN * (GLIDE_COILED if coiled else 1.0)
+    glide = swing * math.sin(UNDULATE_RATE * t + UNDULATE_PHASE)
+    pitch = rest[2] + (0.0 if coiled else HAND_AIM_GAIN * elevation_deg)
+    return rest[0] + glide, rest[1], pitch
+
+
 #: Every writhe oscillator, as (servo, label, depth_deg, rate_rad_s). Used by
 #: test_motion.py to police the render and current budgets above.
 #: (servo, label, depth, rate, how much of that depth survives while coiled)
@@ -985,8 +1011,9 @@ WRITHE_TERMS = [
     (1, "grope", GROPE_DEPTH, GROPE_RATE, 1.0),
     (2, "roll", ROLL_DEPTH, ROLL_RATE, 1.0),
     (3, "nod", NOD_DEPTH, NOD_RATE, COILED_WRITHE),
-    (4, "undulate", ELBOW_SWING, UNDULATE_RATE, COILED_UNDULATE),
-    (5, "undulate", SHOULDER_SWING, UNDULATE_RATE, COILED_UNDULATE),
+    # The shoulder and elbow are no longer oscillated directly — they are
+    # whatever holding the hand level happens to require — so there is no
+    # sine of theirs to budget for.
 ]
 
 
@@ -1288,7 +1315,7 @@ def main() -> None:
                         print(f"  {phase}: face {t.cam_bearing_deg:+5.1f} across, "
                               f"{t.elevation_deg:+5.1f} up, {t.cam_range_m:.1f} m "
                               f"-> base {base:+6.1f}, hand aimed "
-                              f"{HAND_AIM_ZERO + t.elevation_deg:+6.1f}")
+                              f"{HAND_REST[2] + t.elevation_deg:+6.1f}")
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
                     print(f"lost it — searching for {SEARCH_S - (now - last_seen):.0f}s more")

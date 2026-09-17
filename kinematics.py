@@ -32,12 +32,16 @@ L_HAND = 4.00     # wrist pivot -> the middle of the gripper
 #: starts 90 degrees from forward.
 UP_DEG = 90.0
 
-#: Which way a positive angle turns each joint: +1 forward, -1 backward.
-#: NOT yet confirmed on the hardware — calibrate.py answers this, and until
-#: it does, nothing here should be driving the arm.
-SIGN_SHOULDER = -1.0
-SIGN_ELBOW = 1.0
-SIGN_WRIST = 1.0
+#: How a positive angle turns each link, as an angle measured up from
+#: forward. Confirmed on the arm with calibrate.py: +45 sends the shoulder
+#: FORWARD, the elbow BACKWARD, the wrist FORWARD.
+#:
+#: They are not all the same, which is the whole reason this was so hard to
+#: reason out: treating the hand's pitch as the three angles added together
+#: is only right if every joint turns the same way, and the elbow does not.
+SIGN_SHOULDER = -1.0    # +45 forward
+SIGN_ELBOW = +1.0       # +45 backward
+SIGN_WRIST = -1.0       # +45 forward
 
 
 def link_angles(shoulder: float, elbow: float, wrist: float) -> tuple[float, float, float]:

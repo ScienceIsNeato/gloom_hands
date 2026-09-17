@@ -305,6 +305,32 @@ drop the Bluetooth link (the hunt now reconnects and carries on if it does). Cal
 
 `gloom_hand_demo.py` stays the blind, single-file version on purpose.
 
+## The hand, not the joints
+
+Everything used to command joint angles and let the hand end up wherever
+those put it. That is how the gripper came to travel from the table top to
+straight overhead: the shoulder was swinging 110 degrees and nothing
+anywhere asked where the hand was going.
+
+`kinematics.py` turns the three pitch joints into the only three numbers
+that matter — how far the hand reaches, how high it sits, and which way it
+points. Three joints, three numbers, exactly one solution. The arm is now
+told where to put its hand, and the shoulder, elbow and wrist each do
+whatever that requires, including opposing one another.
+
+So the height is simply held. Measured across a full body cycle in both
+postures, the hand's height wanders 0.0000 inches; the only change left is
+the 0.69 inches between the reaching and coiled poses themselves. The body
+breathes by gliding the hand in and out along that level, `GLIDE_IN`, which
+is now the whole "how alive does it look" dial.
+
+Two things had to be measured on the real arm, and both are in
+`kinematics.py`: the link lengths pivot to pivot, and which way each joint
+turns. That second one cannot be reasoned out — positive turns the shoulder
+forward, the elbow backward and the wrist forward, so the joint angles do
+NOT simply add up, and every attempt to infer the geometry from the tuned
+poses contradicted itself until `calibrate.py` settled it on the hardware.
+
 ## Servo map (xArm 1S)
 
 ```
