@@ -103,18 +103,23 @@ TICK = 0.22                               # seconds between command packets
 #           depth * rate is that demand. The gripper used to spend half its
 #           budget on a tremor worth a fifth of its travel.
 # test_motion.py checks both. Run it after changing anything here.
-GROPE_DEPTH, GROPE_RATE = 22.0, 1.9     # gripper: the slow opening and closing
-TREMOR_DEPTH, TREMOR_RATE = 6.0, 3.1    # gripper: the shiver laid over it
-ROLL_DEPTH, ROLL_RATE = 14.0, 0.7       # wrist roll writhe
-NOD_DEPTH, NOD_RATE = 11.0, 1.3         # wrist bend searching nods
+# Depths are the 30% larger ones: wider, slower travel reads as a wriggle,
+# where small and fast reads as a shiver. Rates are deliberately NOT raised
+# with them — that is the whole difference between worming and quivering.
+GROPE_DEPTH, GROPE_RATE = 28.5, 1.7     # gripper: the slow opening and closing
+TREMOR_DEPTH, TREMOR_RATE = 6.0, 3.1    # (unused since the switch to waypoints)
+ROLL_DEPTH, ROLL_RATE = 18.0, 0.62      # wrist roll writhe
+NOD_DEPTH, NOD_RATE = 14.0, 1.15        # wrist bend searching nods
 # The heavy joints get a slow sway of their own, so the arm breathes while it
 # holds you rather than locking rigid from the elbow in. Small and slow on
 # purpose: these two carry the weight, and every degree of travel here costs
 # far more current than the same degree at the wrist. The rates share no
 # common factor with each other or with the wrist, so the three never fall
 # into step and the motion never looks like a loop.
-ELBOW_DEPTH, ELBOW_RATE = 5.0, 1.15     # forearm drifts up and down
-SHOULDER_DEPTH, SHOULDER_RATE = 3.5, 0.83  # the whole arm sways with it
+ELBOW_DEPTH, ELBOW_RATE = 6.5, 1.02     # forearm drifts up and down
+SHOULDER_DEPTH, SHOULDER_RATE = 4.5, 0.74  # the whole arm sways with it
+COILED_WRITHE = 0.9     # how much of that survives while drawn back. It should
+                        # still be working in there, not holding its breath.
 
 # ---- the twitch ------------------------------------------------------ #
 FREEZE_CHANCE = 0.012   # per tick: freeze mid-sweep...
@@ -126,9 +131,18 @@ SNAP_MS = 280           # how fast the snap lands (small ms = violent)
 COIL_EVERY_S = (11.0, 24.0)  # seconds of TRACKING you before the next coil. The strike is
                              # punctuation; following the victim is the sentence.
 COIL_MS = 2400               # how slowly it draws back (menacing = slow, and cheaper in current)
-COIL_STAGGER_S = 0.6         # forearm folds first, THEN the shoulder leans back. Moving both
-                             # at once was the biggest current draw in the whole routine — the
-                             # coil lifts the arm against gravity, where the lurch falls with it.
+# A gesture runs along the arm as a WAVE rather than landing on every joint
+# at once: each joint starts a beat after the one before it. Drawing back the
+# wave runs inward, hand first, so the arm appears to withdraw; striking it
+# runs outward, shoulder first, so the motion cracks along like a whip. It
+# also keeps the heavy joints from starting together, which was the biggest
+# single current draw in the routine.
+COIL_STAGGER_S = 0.55        # beat between joints while drawing back
+# One tick: waypoints are dispatched once per tick, so a finer stagger than
+# that just puts two joints in the same packet and the whip disappears.
+LURCH_STAGGER_S = TICK       # beat between joints while striking
+COIL_ORDER = (3, 4, 5)       # wrist, elbow, shoulder — the wave travels inward
+LURCH_ORDER = (5, 4, 3)      # and outward again to strike
 COIL_HOLD_S = (2.0, 5.0)     # how long it stays coiled, still tracking
 LURCH_MS = 500               # how fast it comes out at you (small = violent; below ~450 the
                              # servos are flat out and the supply sag can drop the Bluetooth link)
@@ -759,38 +773,42 @@ class Waypoints:
     def __init__(self) -> None:
         self.until: dict[int, float] = {}    # when each joint's current move ends
         self.target: dict[int, float] = {}   # where it was last told to go
-        # duration -> {servo: degrees}. The protocol carries ONE duration per
-        # packet, so joints travelling for different lengths of time cannot
-        # share one: batching them would hand the base the writhe's four
-        # seconds and vice versa.
-        self._batch: dict[int, dict[int, float]] = {}
+        # Queued as (send_at, servo, degrees, duration). A move can be decided
+        # now and dispatched later, which is what lets a gesture travel along
+        # the arm as a wave instead of every joint lurching at once.
+        self._queue: list[tuple[float, int, float, float]] = []
 
     def free(self, sid: int, now: float) -> bool:
         return now >= self.until.get(sid, -1e9)
 
-    def go(self, sid: int, deg: float, dur_ms: float, now: float) -> None:
-        """Queue a destination for this joint, to leave with the next flush."""
+    def go(self, sid: int, deg: float, dur_ms: float, now: float, at: float | None = None) -> None:
+        """Queue a destination. `at` delays the dispatch, so a gesture can
+        ripple along the arm rather than arriving everywhere at once."""
+        at = now if at is None else at
         self.target[sid] = deg
-        self.until[sid] = now + dur_ms / 1000.0
-        # round to 50 ms so joints that want near-identical times still share
-        # a packet, without anyone's travel time being materially altered
-        slot = max(50, int(round(dur_ms / 50.0) * 50))
-        self._batch.setdefault(slot, {})[sid] = deg
+        self.until[sid] = at + dur_ms / 1000.0
+        self._queue = [q for q in self._queue if q[1] != sid]  # newest wins
+        self._queue.append((at, sid, deg, dur_ms))
 
-    def flush(self, arm: "Backend") -> int:
-        """Send whatever came due, one packet per travel time. Returns the
-        number of packets sent."""
-        sent = 0
-        for dur, moves in sorted(self._batch.items()):
+    def flush(self, arm: "Backend", now: float) -> int:
+        """Send whatever is due, one packet per travel time. Returns packets."""
+        due = [q for q in self._queue if q[0] <= now]
+        if not due:
+            return 0
+        self._queue = [q for q in self._queue if q[0] > now]
+        # Round travel times to 50 ms so joints wanting near-identical times
+        # still share a packet, without materially altering anyone's move.
+        batch: dict[int, dict[int, float]] = {}
+        for _at, sid, deg, dur in due:
+            batch.setdefault(max(50, int(round(dur / 50.0) * 50)), {})[sid] = deg
+        for dur, moves in sorted(batch.items()):
             arm.send(moves, dur)
-            sent += 1
-        self._batch = {}
-        return sent
+        return len(batch)
 
     def forget(self) -> None:
         self.until.clear()
         self.target.clear()
-        self._batch = {}
+        self._queue = []
 
 
 def next_extreme(rate: float, phase: float, t: float) -> tuple[float, float]:
@@ -1217,12 +1235,11 @@ def main() -> None:
                 if coil == "out":
                     print("...drawing back")
                     log.event(now, "coil", base=base, volts=(volts if volts else "?"))
-                    wp.go(4, POSE_COIL_DEG[4], COIL_MS, now)
-                    wp.go(3, POSE_COIL_DEG[3], COIL_MS, now)
-                    coil, coil_at = "folding", now + COIL_STAGGER_S
-                elif coil == "folding":
-                    wp.go(5, POSE_COIL_DEG[5], COIL_MS, now)
-                    coil, coil_at = "coiling", now + COIL_MS / 1000
+                    for i, sid in enumerate(COIL_ORDER):
+                        wp.go(sid, POSE_COIL_DEG[sid], COIL_MS, now,
+                              at=now + i * COIL_STAGGER_S)
+                    coil = "coiling"
+                    coil_at = now + (len(COIL_ORDER) - 1) * COIL_STAGGER_S + COIL_MS / 1000
                 elif coil == "coiling":
                     coil = "coiled"
                     coil_at = now + (hold_override or random.uniform(*COIL_HOLD_S))
@@ -1230,9 +1247,11 @@ def main() -> None:
                 elif coil == "coiled":
                     print("LURCH")
                     log.event(now, "lurch", base=base, volts=(volts if volts else "?"))
-                    for _sid, _deg in lurch_pose().items():
-                        wp.go(_sid, _deg, LURCH_MS, now)
-                    coil, coil_at = "settling", now + LURCH_MS / 1000
+                    target = lurch_pose()
+                    for i, sid in enumerate(LURCH_ORDER):
+                        wp.go(sid, target[sid], LURCH_MS, now, at=now + i * LURCH_STAGGER_S)
+                    coil = "settling"
+                    coil_at = now + (len(LURCH_ORDER) - 1) * LURCH_STAGGER_S + LURCH_MS / 1000
                 else:
                     sid = LURCH_OVERSHOOT_JOINT
                     wp.go(sid, reach_pose()[sid], SETTLE_MS, now)
@@ -1268,7 +1287,7 @@ def main() -> None:
                         # and more gently while drawn back than while reaching
                         coiled = coil in ("coiling", "coiled")
                         home = POSE_COIL_DEG[sid] if coiled else reach_pose()[sid]
-                        depth *= 0.6 if coiled else 1.0
+                        depth *= COILED_WRITHE if coiled else 1.0
                     else:
                         home = POSE_POINT_DEG[sid]
                     wp.go(sid, clamp_deg(sid, home + sign * depth),
@@ -1277,7 +1296,7 @@ def main() -> None:
             if time.monotonic() - t0 > tick_due:
                 late += 1  # the work overran its slot; the cadence is slipping
             t_send = time.monotonic()
-            packets += wp.flush(arm)
+            packets += wp.flush(arm, now)
             send_ms = (time.monotonic() - t_send) * 1000
             slow_send = max(slow_send, send_ms)
             pace(tick_due)
