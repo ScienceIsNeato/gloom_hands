@@ -47,6 +47,7 @@ class _Track:
     last_hit: float = 0.0
     born: float = 0.0
     hits: int = 0
+    proven: bool = True   # has the PRIMARY detector ever confirmed this?
 
 
 class Tracker:
@@ -67,6 +68,12 @@ class Tracker:
         max_secondary_width: float = 0.45,  # of frame width — people are not that wide
         secondary_aspect: float = 1.3,      # at least this much taller than wide
         secondary_confirm: int = 4,         # consecutive frames agreeing before it counts
+        # A blob may raise the alarm; only a face keeps it up. A track the
+        # primary has never confirmed is dropped after this long, so a
+        # lighting change or a shifted chair can wake the arm briefly but
+        # cannot hold it awake all night — which is what stopped an empty
+        # room from ever getting to sleep.
+        prove_by_s: float = 5.0,
         gate_frac: float = 0.2,
         size_alpha: float = 0.3,
         pos_alpha: float = 0.75,   # how much of each new reading to take; higher = less lag
@@ -82,6 +89,7 @@ class Tracker:
         self.max_secondary_width = max_secondary_width
         self.secondary_aspect = secondary_aspect
         self.secondary_confirm = secondary_confirm
+        self.prove_by_s = prove_by_s
         self._cand = 0
         self._cand_x = None
         self.gate_frac = gate_frac
@@ -170,8 +178,9 @@ class Tracker:
             width_px=(d.width_px * k if d.width_px else None),
         )
 
-    def _start(self, d: Detection, now: float) -> None:
-        self._track = _Track(d.x, d.top, d.bottom, d.width_px, d.real_height_m, 0.0, now, now, 1)
+    def _start(self, d: Detection, now: float, proven: bool = True) -> None:
+        self._track = _Track(d.x, d.top, d.bottom, d.width_px, d.real_height_m,
+                             0.0, now, now, 1, proven)
         self._far_hits = 0
 
     def _update(self, x: float, top: float | None, bottom: float | None, width: float | None,
@@ -222,11 +231,17 @@ class Tracker:
                     self._cand_x = s.x
                     if self._cand >= self.secondary_confirm:
                         self._cand, self._cand_x = 0, None
-                        self._start(self._rescale(s), now)
+                        self._start(self._rescale(s), now, proven=False)
                         self.last_source = "secondary"
                         return self._report(now)
                 else:
                     self._cand, self._cand_x = 0, None
+            self.last_source = ""
+            return None
+
+        # A track the primary has never vouched for does not get to stay.
+        if not t.proven and now - t.born > self.prove_by_s:
+            self._track = None
             self.last_source = ""
             return None
 
@@ -237,6 +252,7 @@ class Tracker:
             if abs(hit.x - pred) <= gate:
                 self._update(hit.x, hit.top, hit.bottom, hit.width_px, now, dt)
                 self._far_hits = 0
+                t.proven = True
                 self.last_source = "primary"
                 return self._report(now)
             # A confident hit somewhere else: only switch if it keeps happening.

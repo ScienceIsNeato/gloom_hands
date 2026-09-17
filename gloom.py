@@ -1184,7 +1184,11 @@ def main() -> None:
             # and takes the radio with it, and a stream of write-only position
             # commands sails on regardless, which is why this could run for
             # hours against an arm that had been dead since the first lurch.
-            if now - health_at >= 2.0:
+            # ...but not while WE are the reason it is quiet. Going slack drops
+            # the link on purpose, and the monitor was then declaring the arm
+            # dead for being disconnected, reconnecting it, and starting over:
+            # a loop of our own making that never let it rest.
+            if now - health_at >= 2.0 and not arm.released:
                 health_at = now
                 ok, why = arm.health()
                 if ok:
@@ -1206,6 +1210,8 @@ def main() -> None:
                               last_coil=coil, volts=(volts if volts else "?"))
                 if ok:
                     declared_dead = False
+            elif arm.released:
+                unwell_since, declared_dead = None, False
 
             if now - last_sample >= 5.0:
                 last_sample = now
@@ -1239,8 +1245,8 @@ def main() -> None:
                     # Start reconnecting the moment a face appears, so the link
                     # is up by the time the wake threshold passes instead of
                     # costing several seconds after it.
-                    if held > 0 and not warming:
-                        arm.prewarm()
+                    if held > 0 and not warming and now >= cooldown_until:
+                        arm.prewarm()   # pointless during a cooldown: it cannot wake
                         warming = True
                     elif held == 0:
                         warming = False

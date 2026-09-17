@@ -228,6 +228,11 @@ comes up empty, provided the blob is person-sized. Precision about where
 someone's face is matters less than noticing they are there at all; once
 a track exists, a face reasserts itself the moment one is visible.
 
+A blob may raise the alarm, but only a face keeps it up: a track the face
+detector has never confirmed is dropped after `prove_by_s`. Without that, a
+lighting change or a shifted chair could hold the arm awake indefinitely,
+and an empty room never got to sleep.
+
 That fallback is deliberately fussy, because it started out too eager. A
 webcam adjusting its exposure makes the *whole frame* differ from the
 learned background, which arrives as one enormous blob and reads as a
