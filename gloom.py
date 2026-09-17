@@ -129,12 +129,37 @@ NOD_DEPTH, NOD_RATE = 3.5, 0.95         # wrist bend, barely
 # It is also kinder than moving them independently: the two contributions to
 # the centre of mass largely cancel, so a big visible motion costs much less
 # change in holding torque than its size suggests.
-UNDULATE_DEPTH = 15.0   # degrees, +to the shoulder and -to the elbow
-UNDULATE_RATE = 1.05    # slow: this is a body roll, not a tremor
+# All three pitch joints turn about parallel axes, so the hand's angle in the
+# world is simply shoulder + elbow + wrist. That single identity is the whole
+# "inverse kinematics" for pointing: the shoulder and elbow are free to coil
+# through whatever arc they like, and the wrist is whatever is left over.
+#
+#     wrist = where_the_hand_should_point - shoulder - elbow
+#
+# The two free joints are given DIFFERENT amplitudes and a phase offset from
+# exact opposition, so the motion travels through the arm instead of the two
+# simply mirroring each other — and whatever they fail to cancel, the wrist
+# takes up. That residual is what gives the wrist its own live correction
+# rather than a dead stare.
+SHOULDER_SWING = 26.0   # degrees either side of its resting angle
+ELBOW_SWING = 28.0      # and the elbow's, counter-rotating
+UNDULATE_RATE = 0.95    # slow: this is a body roll, not a tremor
 UNDULATE_PHASE = 0.4
-COILED_WRITHE = 0.9     # how much of the writhe survives while drawn back
-COILED_UNDULATE = 0.45  # the elbow is already near its stop when coiled, so
-                        # the pair has to breathe more shallowly in there
+UNDULATE_LAG = 0.55     # radians off exact opposition. 0 = perfect mirror and a
+                        # perfectly still wrist; larger sends a wave along the arm
+                        # and leaves the wrist more to correct.
+# The coil folds the elbow to -100 and its soft stop is -108, so the swing in
+# there cannot exceed 8 degrees without clipping — and a clipped sine is a
+# flat spot, which is exactly the dead-looking motion being removed.
+COILED_UNDULATE = 0.26
+COILED_WRITHE = 0.9     # how much of the wrist's own breath survives in there
+
+# Where the hand points when shoulder + elbow + wrist add up to HAND_AIM_ZERO.
+# Taken from the tuned reach pose, so an elevation of zero reproduces exactly
+# the posture that was dialled in by hand; the face's elevation then shifts it
+# from there. If the hand consistently aims high or low, this is the number.
+HAND_AIM_ZERO = 6.0
+HAND_AIM_GAIN = 1.0     # how much of the face's elevation to actually follow
 
 # ---- the twitch ------------------------------------------------------ #
 FREEZE_CHANCE = 0.012   # per tick: freeze mid-sweep...
@@ -841,18 +866,44 @@ def next_extreme(rate: float, phase: float, t: float) -> tuple[float, float]:
 #: Each writhe joint as (servo, depth, rate, phase). The gripper's fast
 #: tremor is gone: at two commands per cycle there is nothing to carry it,
 #: and it was never renderable at any rate this link supports.
+#: The joints that just oscillate on their own. The three pitch joints are
+#: not here: they move as one gesture through aim_pose().
 WRITHE_WAVES = (
     (1, GROPE_DEPTH, GROPE_RATE, 1.0),
     (2, ROLL_DEPTH, ROLL_RATE, 0.0),
-    (3, NOD_DEPTH, NOD_RATE, 2.1),
 )
 
-#: The opposed pair, as (servo, sign). Commanded together or not at all.
-UNDULATE_PAIR = ((5, +1.0), (4, -1.0))
+def undulate_at(t: float, coiled: bool) -> tuple[float, float]:
+    """Shoulder and elbow offsets from their resting angles, at time t."""
+    f = COILED_UNDULATE if coiled else 1.0
+    s = SHOULDER_SWING * f * math.sin(UNDULATE_RATE * t + UNDULATE_PHASE)
+    e = ELBOW_SWING * f * math.sin(UNDULATE_RATE * t + UNDULATE_PHASE + math.pi + UNDULATE_LAG)
+    return s, e
+
+
+def aim_pose(t: float, elevation_deg: float, coiled: bool) -> dict[int, float]:
+    """The three pitch joints: the arm coiling freely underneath, and the
+    wrist taking whatever is left so the hand keeps pointing at the face.
+
+    While drawn back the hand cannot reach the face at all — the arm is
+    folded behind itself — so the wrist simply follows the coil pose and
+    resumes aiming when it comes back out.
+    """
+    base_pose = POSE_COIL_DEG if coiled else reach_pose()
+    ds, de = undulate_at(t, coiled)
+    sh = clamp_deg(5, base_pose[5] + ds)
+    el = clamp_deg(4, base_pose[4] + de)
+    if coiled:
+        wr = clamp_deg(3, POSE_COIL_DEG[3])
+    else:
+        want = HAND_AIM_ZERO + HAND_AIM_GAIN * elevation_deg
+        wr = clamp_deg(3, want - sh - el)
+    return {5: sh, 4: el, 3: wr}
 
 #: Joints the strike also drives. Their writhe has to oscillate around
 #: whatever posture the strike has put them in, not around a fixed pose.
-POSED_JOINTS = (3,)
+AIM_JOINTS = (5, 4, 3)   # shoulder, elbow, wrist: commanded as one
+AIM_STEP_DEG = 3.5       # re-aim early if the face has moved this far vertically
 
 #: Command updates per second the writhe was tuned for. Everything in
 #: WRITHE_TERMS assumes roughly eight of them per cycle; fewer and a sine
@@ -921,8 +972,8 @@ WRITHE_TERMS = [
     (1, "grope", GROPE_DEPTH, GROPE_RATE, 1.0),
     (2, "roll", ROLL_DEPTH, ROLL_RATE, 1.0),
     (3, "nod", NOD_DEPTH, NOD_RATE, COILED_WRITHE),
-    (4, "undulate", UNDULATE_DEPTH, UNDULATE_RATE, COILED_UNDULATE),
-    (5, "undulate", UNDULATE_DEPTH, UNDULATE_RATE, COILED_UNDULATE),
+    (4, "undulate", ELBOW_SWING, UNDULATE_RATE, COILED_UNDULATE),
+    (5, "undulate", SHOULDER_SWING, UNDULATE_RATE, COILED_UNDULATE),
 ]
 
 
@@ -1019,6 +1070,9 @@ def main() -> None:
     slow_send = 0.0       # worst time spent handing a packet to the arm, ms
     late = 0              # ticks that overran their slot
     last_base_cmd = -1e9  # when the base was last given a new heading
+    elevation = 0.0       # how far above the lens the face sits, degrees
+    aimed_at = 0.0        # the elevation the hand is currently aimed at
+    last_aim = -1e9       # when the three pitch joints were last re-aimed
     packets = 0           # commands actually sent since the last log line
     health_at = -1e9      # when the arm was last asked whether it is alive
     unwell_since = None   # when it stopped answering
@@ -1202,6 +1256,7 @@ def main() -> None:
                     base, t = seen
                     base = clamp_deg(6, base)
                     last_seen = now
+                    elevation = t.elevation_deg
                     if not locked:
                         locked = True
                         print(f"victim spotted: {t.cam_range_m:.1f} m at "
@@ -1217,8 +1272,10 @@ def main() -> None:
                         last_report = now
                     elif now - last_report >= 1.5:  # show that it is still following
                         phase = coil if coil != "out" else "tracking"
-                        print(f"  {phase}: face {t.cam_bearing_deg:+5.1f} deg at "
-                              f"{t.cam_range_m:.1f} m -> base {base:+6.1f} deg")
+                        print(f"  {phase}: face {t.cam_bearing_deg:+5.1f} across, "
+                              f"{t.elevation_deg:+5.1f} up, {t.cam_range_m:.1f} m "
+                              f"-> base {base:+6.1f}, hand aimed "
+                              f"{HAND_AIM_ZERO + t.elevation_deg:+6.1f}")
                         last_report = now
                 elif locked and now - last_seen > LOST_AFTER_S:
                     print(f"lost it — searching for {SEARCH_S - (now - last_seen):.0f}s more")
@@ -1295,30 +1352,28 @@ def main() -> None:
             # Each writhe joint is sent to the sine's next peak or trough, and
             # draws the line there itself. Two commands a cycle, not fifteen.
             if amp > 0:
-                # The opposed pair moves as one gesture or not at all: letting
-                # the two drift out of step would defeat the cancellation and
-                # the hand would start waving about.
                 coiled = coil in ("coiling", "coiled")
-                if all(wp.free(sid, now) for sid, _ in UNDULATE_PAIR):
-                    when, sign = next_extreme(UNDULATE_RATE, UNDULATE_PHASE, now)
-                    depth = UNDULATE_DEPTH * (COILED_UNDULATE if coiled else 1.0)
-                    dur = max(400.0, (when - now) * 1000)
-                    for sid, way in UNDULATE_PAIR:
-                        home = POSE_COIL_DEG[sid] if coiled else reach_pose()[sid]
-                        wp.go(sid, clamp_deg(sid, home + way * sign * depth), dur, now)
+                # THE THREE PITCH JOINTS MOVE AS ONE GESTURE. The shoulder and
+                # elbow coil freely; the wrist is whatever is left over, so the
+                # hand stays pointed at the face throughout. They must go out
+                # together: linear travel between two correctly-aimed poses
+                # keeps the aim correct the whole way, but only if all three
+                # set off at once.
+                free = all(wp.free(sid, now) for sid in AIM_JOINTS)
+                drifted = (abs(elevation - aimed_at) >= AIM_STEP_DEG
+                           and now - last_aim >= BASE_EVERY_S)
+                if free or drifted:
+                    when, _ = next_extreme(UNDULATE_RATE, UNDULATE_PHASE, now)
+                    dur = max(400.0, min(2500.0, (when - now) * 1000))
+                    for sid, deg in aim_pose(when, elevation, coiled).items():
+                        wp.go(sid, deg, dur, now)
+                    aimed_at, last_aim = elevation, now
 
                 for sid, depth, rate, phase in WRITHE_WAVES:
                     if not wp.free(sid, now):
                         continue  # still travelling; interrupting is the bug
                     when, sign = next_extreme(rate, phase, now)
-                    if sid in POSED_JOINTS:
-                        # sway around wherever the strike has left this joint,
-                        # and more gently while drawn back than while reaching
-                        home = POSE_COIL_DEG[sid] if coiled else reach_pose()[sid]
-                        depth *= COILED_WRITHE if coiled else 1.0
-                    else:
-                        home = POSE_POINT_DEG[sid]
-                    wp.go(sid, clamp_deg(sid, home + sign * depth),
+                    wp.go(sid, clamp_deg(sid, POSE_POINT_DEG[sid] + sign * depth),
                           max(300.0, (when - now) * 1000), now)
 
             if time.monotonic() - t0 > tick_due:

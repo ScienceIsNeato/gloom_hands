@@ -52,6 +52,7 @@ class Observation:
     relative to the CAMERA. Angle is degrees off the optical axis (left
     positive); distance is metres, estimated from apparent size."""
     angle_deg: float
+    elevation_deg: float   # above (+) or below (-) the lens axis
     distance_m: float
     distance_known: bool   # False when default_range_m had to be used
     height_px: float       # the apparent size the distance came from
@@ -60,6 +61,7 @@ class Observation:
 @dataclass(frozen=True)
 class Target:
     bearing_deg: float       # from the actuator pivot, CCW positive
+    elevation_deg: float     # above (+) or below (-) the lens axis
     range_m: float           # from the actuator pivot
     cam_bearing_deg: float   # from the camera's optical axis
     cam_range_m: float       # from the camera
@@ -95,6 +97,19 @@ class Locator:
         # pixels increase to the right; bearings are positive to the left
         return -math.degrees(math.atan2(dx, f))
 
+    def cam_elevation_deg(self, det: Detection) -> float:
+        """How far above or below the lens axis the target sits.
+
+        The ray through the middle of the detection box, in the vertical
+        plane. Image rows increase downward, so the sign is flipped: a face
+        in the upper half of the frame is a positive elevation. This is what
+        lets the hand be aimed up or down at somebody rather than only
+        swung left and right at them.
+        """
+        f = focal_px(det.frame_w, self.pose.hfov_deg)
+        cy = (det.top + det.bottom) / 2.0
+        return math.degrees(math.atan2(det.frame_h / 2.0 - cy, f))
+
     def cam_range_m(self, det: Detection) -> tuple[float, bool]:
         if det.height_px < self.min_height_px:
             return self.default_range_m, False
@@ -107,7 +122,8 @@ class Locator:
     def observe(self, det: Detection) -> Observation:
         """Distance and angle relative to the camera — the video piece's output."""
         r, known = self.cam_range_m(det)
-        return Observation(self.cam_bearing_deg(det), r, known, det.height_px)
+        return Observation(self.cam_bearing_deg(det), self.cam_elevation_deg(det),
+                           r, known, det.height_px)
 
     def locate(self, det: Detection) -> Target:
         obs = self.observe(det)
@@ -121,6 +137,7 @@ class Locator:
         py = cx * math.sin(yaw) + cy * math.cos(yaw) + self.pose.y_m
         return Target(
             bearing_deg=math.degrees(math.atan2(py, px)),
+            elevation_deg=obs.elevation_deg,
             range_m=math.hypot(px, py),
             cam_bearing_deg=beta,
             cam_range_m=r_cam,
