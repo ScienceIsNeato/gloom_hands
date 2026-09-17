@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Motion budgets: can the arm actually render what the writhe asks for?
+"""Motion budgets: is the writhe sane to command and safe to run?
 
     ./test_motion.py
 
-Two ways a writhe oscillator goes wrong, both invisible in the source:
+The arm is driven by WAYPOINTS now, not a stream: each joint is sent to its
+sine's next turning point and draws the line there itself. So the old rule
+here — enough command updates per cycle to render a curve — no longer
+applies; there are exactly two per cycle by construction. What still matters:
 
-  RENDER   commands go out once per TICK, so a component needs about eight
-           of them per cycle or it steps instead of moving. A 1 Hz tremor
-           at a 4.5 Hz command rate gets 4.5 steps and looks like jitter.
-  CURRENT  a servo draws roughly in proportion to how fast it is told to
-           move, and depth * rate is that demand. With the supply already
-           browning out on the coil, every deg/s of continuous oscillation
-           is worth having a reason for.
+  CURRENT   depth * rate is how fast a joint is being asked to move, and the
+            supply is known to sag. The heavy joints get small, slow sways.
+  RATE      two commands per cycle means a very fast oscillator would still
+            pester its servo, and every command restarts the servo's move.
+  LIMITS    the sway must not push any joint through its soft stop, in any
+            posture the strike can leave it in.
+  SENSE     the arm must turn toward the victim, not away.
 
 No hardware needed.
 """
@@ -28,59 +31,47 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
 import math
 
 from angles import LIMITS_DEG, NAMES
-from gloom import BASE_SIGN, NOD_DEPTH, CAMERA, CAPTURE_SIZE, POSE_COIL_DEG, POSE_POINT_DEG, TICK, WRITHE_TERMS, body_pose
+from gloom import (BASE_SIGN, CAMERA, CAPTURE_SIZE, POSE_COIL_DEG, POSE_POINT_DEG,
+                   WRITHE_TERMS, reach_pose)
 
-MIN_STEPS_PER_CYCLE = 8.0   # below this a sine reads as stepping
 MAX_JOINT_SLEW = 70.0       # deg/s of continuous demand on any one joint
+MAX_JOINT_CMD_HZ = 1.2      # commands per second any one joint should need
 
 
 def main() -> int:
-    rate = 1.0 / TICK
-    ceiling_hz = rate / MIN_STEPS_PER_CYCLE
-    print(f"command rate {rate:.1f} Hz -> smooth up to {ceiling_hz:.2f} Hz "
-          f"({ceiling_hz * 2 * math.pi:.1f} rad/s)\n")
-
     bad = []
     per_joint: dict[int, float] = {}
+    print(f"  {'joint':22s} {'sway':>7s} {'period':>8s} {'cmds/s':>8s} {'slew':>9s}")
     for sid, label, depth, omega in WRITHE_TERMS:
-        hz = omega / (2 * math.pi)
-        steps = rate / hz
+        period = 2 * math.pi / omega
+        hz = 2.0 / period          # two waypoints per cycle
         slew = depth * omega
         per_joint[sid] = per_joint.get(sid, 0.0) + slew
-        ok = steps >= MIN_STEPS_PER_CYCLE
-        print(f"  servo {sid} {NAMES[sid]:11s} {label:7s} "
-              f"+/-{depth:4.1f} deg at {hz:4.2f} Hz  "
-              f"{steps:5.1f} steps/cycle  {slew:5.1f} deg/s  {'ok' if ok else 'STEPPY'}")
+        ok = hz <= MAX_JOINT_CMD_HZ
+        print(f"  {sid} {NAMES[sid]:10s} {label:8s} {depth:5.1f}d {period:7.1f}s "
+              f"{hz:8.2f} {slew:7.1f}d/s  {'ok' if ok else 'TOO CHATTY'}")
         if not ok:
-            bad.append(f"servo {sid} {label}: {steps:.1f} steps/cycle, needs {MIN_STEPS_PER_CYCLE:.0f}")
+            bad.append(f"servo {sid} {label}: {hz:.2f} commands/s, over {MAX_JOINT_CMD_HZ}")
 
     print()
     for sid, slew in sorted(per_joint.items()):
         ok = slew <= MAX_JOINT_SLEW
-        print(f"  servo {sid} {NAMES[sid]:11s} total continuous demand {slew:5.1f} deg/s  "
+        print(f"  servo {sid} {NAMES[sid]:11s} total demand {slew:5.1f} deg/s  "
               f"{'ok' if ok else 'TOO FAST'}")
         if not ok:
             bad.append(f"servo {sid}: {slew:.1f} deg/s exceeds {MAX_JOINT_SLEW:.0f}")
 
-    # the writhe must never drive a joint through its soft limit, in any
-    # posture the animator can put the arm in
-    for home, nod in ((POSE_POINT_DEG, 1.0), (POSE_COIL_DEG, 0.6)):
-        for t in [i * 0.05 for i in range(400)]:
-            pose = body_pose(t, 0.0, home, nod)
-            assert set(pose) == {1, 2, 3, 4, 5, 6}, pose
-            for sid, deg in pose.items():
-                lo, hi = LIMITS_DEG[sid]
-                if not lo - 1e-6 <= deg <= hi + 1e-6:
-                    bad.append(f"servo {sid} reaches {deg:.1f} deg, outside {lo}..{hi}")
-
-    # the oscillators decorate the animated posture rather than replacing it
-    for home in (POSE_POINT_DEG, POSE_COIL_DEG):
-        pose = body_pose(0.0, 0.0, home, 1.0)
-        for sid in (4, 5):
-            if abs(pose[sid] - home[sid]) > 1e-6:
-                bad.append(f"servo {sid} drifted off the animated pose")
-        if abs(pose[3] - home[3]) > NOD_DEPTH + 1e-6:
-            bad.append("wrist nod exceeds its depth")
+    # the sway must not push a joint through a soft stop, in either posture
+    for sid, label, depth, _ in WRITHE_TERMS:
+        for posture, home_of in (("reaching", reach_pose), ("coiled", lambda: POSE_COIL_DEG)):
+            home = home_of().get(sid, POSE_POINT_DEG.get(sid))
+            if home is None:
+                continue
+            lo, hi = LIMITS_DEG[sid]
+            for edge in (home - depth, home + depth):
+                if not lo - 1e-6 <= edge <= hi + 1e-6:
+                    bad.append(f"servo {sid} {label} reaches {edge:.1f} deg while {posture}, "
+                               f"outside {lo}..{hi}")
 
     # --- tracking sense: the arm must turn TOWARD the victim -------------- #
     # A webcam looking at you puts your right on the left of its frame. So a

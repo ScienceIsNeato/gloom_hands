@@ -107,6 +107,14 @@ GROPE_DEPTH, GROPE_RATE = 22.0, 1.9     # gripper: the slow opening and closing
 TREMOR_DEPTH, TREMOR_RATE = 6.0, 3.1    # gripper: the shiver laid over it
 ROLL_DEPTH, ROLL_RATE = 14.0, 0.7       # wrist roll writhe
 NOD_DEPTH, NOD_RATE = 11.0, 1.3         # wrist bend searching nods
+# The heavy joints get a slow sway of their own, so the arm breathes while it
+# holds you rather than locking rigid from the elbow in. Small and slow on
+# purpose: these two carry the weight, and every degree of travel here costs
+# far more current than the same degree at the wrist. The rates share no
+# common factor with each other or with the wrist, so the three never fall
+# into step and the motion never looks like a loop.
+ELBOW_DEPTH, ELBOW_RATE = 5.0, 1.15     # forearm drifts up and down
+SHOULDER_DEPTH, SHOULDER_RATE = 3.5, 0.83  # the whole arm sways with it
 
 # ---- the twitch ------------------------------------------------------ #
 FREEZE_CHANCE = 0.012   # per tick: freeze mid-sweep...
@@ -804,7 +812,13 @@ WRITHE_WAVES = (
     (1, GROPE_DEPTH, GROPE_RATE, 1.0),
     (2, ROLL_DEPTH, ROLL_RATE, 0.0),
     (3, NOD_DEPTH, NOD_RATE, 2.1),
+    (4, ELBOW_DEPTH, ELBOW_RATE, 0.7),
+    (5, SHOULDER_DEPTH, SHOULDER_RATE, 3.4),
 )
+
+#: Joints the strike also drives. Their writhe has to oscillate around
+#: whatever posture the strike has put them in, not around a fixed pose.
+POSED_JOINTS = (3, 4, 5)
 
 #: Command updates per second the writhe was tuned for. Everything in
 #: WRITHE_TERMS assumes roughly eight of them per cycle; fewer and a sine
@@ -870,9 +884,10 @@ def lurch_pose() -> dict[int, float]:
 #: test_motion.py to police the render and current budgets above.
 WRITHE_TERMS = [
     (1, "grope", GROPE_DEPTH, GROPE_RATE),
-    (1, "tremor", TREMOR_DEPTH, TREMOR_RATE),
     (2, "roll", ROLL_DEPTH, ROLL_RATE),
     (3, "nod", NOD_DEPTH, NOD_RATE),
+    (4, "elbow sway", ELBOW_DEPTH, ELBOW_RATE),
+    (5, "shoulder sway", SHOULDER_DEPTH, SHOULDER_RATE),
 ]
 
 
@@ -1248,10 +1263,12 @@ def main() -> None:
                     if not wp.free(sid, now):
                         continue  # still travelling; interrupting is the bug
                     when, sign = next_extreme(rate, phase, now)
-                    if sid == 3:
-                        home = (POSE_COIL_DEG[3] if coil in ("coiling", "coiled")
-                                else reach_pose()[3])
-                        depth *= 0.6 if coil in ("coiling", "coiled") else 1.0
+                    if sid in POSED_JOINTS:
+                        # sway around wherever the strike has left this joint,
+                        # and more gently while drawn back than while reaching
+                        coiled = coil in ("coiling", "coiled")
+                        home = POSE_COIL_DEG[sid] if coiled else reach_pose()[sid]
+                        depth *= 0.6 if coiled else 1.0
                     else:
                         home = POSE_POINT_DEG[sid]
                     wp.go(sid, clamp_deg(sid, home + sign * depth),
