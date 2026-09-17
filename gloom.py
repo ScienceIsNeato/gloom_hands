@@ -109,17 +109,32 @@ TICK = 0.22                               # seconds between command packets
 GROPE_DEPTH, GROPE_RATE = 28.5, 1.7     # gripper: the slow opening and closing
 TREMOR_DEPTH, TREMOR_RATE = 6.0, 3.1    # (unused since the switch to waypoints)
 ROLL_DEPTH, ROLL_RATE = 18.0, 0.62      # wrist roll writhe
-NOD_DEPTH, NOD_RATE = 14.0, 1.15        # wrist bend searching nods
+# Small on purpose: the hand is supposed to look steady while the arm
+# undulates beneath it, so the wrist only breathes rather than nodding.
+NOD_DEPTH, NOD_RATE = 3.5, 0.95         # wrist bend, barely
 # The heavy joints get a slow sway of their own, so the arm breathes while it
 # holds you rather than locking rigid from the elbow in. Small and slow on
 # purpose: these two carry the weight, and every degree of travel here costs
 # far more current than the same degree at the wrist. The rates share no
 # common factor with each other or with the wrist, so the three never fall
 # into step and the motion never looks like a loop.
-ELBOW_DEPTH, ELBOW_RATE = 6.5, 1.02     # forearm drifts up and down
-SHOULDER_DEPTH, SHOULDER_RATE = 4.5, 0.74  # the whole arm sways with it
-COILED_WRITHE = 0.9     # how much of that survives while drawn back. It should
-                        # still be working in there, not holding its breath.
+# THE UNDULATION. The shoulder and the elbow are driven as one opposed pair:
+# the shoulder swings +D while the elbow swings -D, at the same rate and the
+# same instant. Their sum is the forearm's angle in the world, so holding that
+# sum constant means the upper arm sweeps through a large arc while the
+# forearm counter-rotates by exactly as much — the arm works hard underneath
+# while the hand keeps its attitude. That is the difference between a creature
+# worming and an arm waving.
+#
+# It is also kinder than moving them independently: the two contributions to
+# the centre of mass largely cancel, so a big visible motion costs much less
+# change in holding torque than its size suggests.
+UNDULATE_DEPTH = 15.0   # degrees, +to the shoulder and -to the elbow
+UNDULATE_RATE = 1.05    # slow: this is a body roll, not a tremor
+UNDULATE_PHASE = 0.4
+COILED_WRITHE = 0.9     # how much of the writhe survives while drawn back
+COILED_UNDULATE = 0.45  # the elbow is already near its stop when coiled, so
+                        # the pair has to breathe more shallowly in there
 
 # ---- the twitch ------------------------------------------------------ #
 FREEZE_CHANCE = 0.012   # per tick: freeze mid-sweep...
@@ -830,13 +845,14 @@ WRITHE_WAVES = (
     (1, GROPE_DEPTH, GROPE_RATE, 1.0),
     (2, ROLL_DEPTH, ROLL_RATE, 0.0),
     (3, NOD_DEPTH, NOD_RATE, 2.1),
-    (4, ELBOW_DEPTH, ELBOW_RATE, 0.7),
-    (5, SHOULDER_DEPTH, SHOULDER_RATE, 3.4),
 )
+
+#: The opposed pair, as (servo, sign). Commanded together or not at all.
+UNDULATE_PAIR = ((5, +1.0), (4, -1.0))
 
 #: Joints the strike also drives. Their writhe has to oscillate around
 #: whatever posture the strike has put them in, not around a fixed pose.
-POSED_JOINTS = (3, 4, 5)
+POSED_JOINTS = (3,)
 
 #: Command updates per second the writhe was tuned for. Everything in
 #: WRITHE_TERMS assumes roughly eight of them per cycle; fewer and a sine
@@ -900,12 +916,13 @@ def lurch_pose() -> dict[int, float]:
 
 #: Every writhe oscillator, as (servo, label, depth_deg, rate_rad_s). Used by
 #: test_motion.py to police the render and current budgets above.
+#: (servo, label, depth, rate, how much of that depth survives while coiled)
 WRITHE_TERMS = [
-    (1, "grope", GROPE_DEPTH, GROPE_RATE),
-    (2, "roll", ROLL_DEPTH, ROLL_RATE),
-    (3, "nod", NOD_DEPTH, NOD_RATE),
-    (4, "elbow sway", ELBOW_DEPTH, ELBOW_RATE),
-    (5, "shoulder sway", SHOULDER_DEPTH, SHOULDER_RATE),
+    (1, "grope", GROPE_DEPTH, GROPE_RATE, 1.0),
+    (2, "roll", ROLL_DEPTH, ROLL_RATE, 1.0),
+    (3, "nod", NOD_DEPTH, NOD_RATE, COILED_WRITHE),
+    (4, "undulate", UNDULATE_DEPTH, UNDULATE_RATE, COILED_UNDULATE),
+    (5, "undulate", UNDULATE_DEPTH, UNDULATE_RATE, COILED_UNDULATE),
 ]
 
 
@@ -1278,6 +1295,18 @@ def main() -> None:
             # Each writhe joint is sent to the sine's next peak or trough, and
             # draws the line there itself. Two commands a cycle, not fifteen.
             if amp > 0:
+                # The opposed pair moves as one gesture or not at all: letting
+                # the two drift out of step would defeat the cancellation and
+                # the hand would start waving about.
+                coiled = coil in ("coiling", "coiled")
+                if all(wp.free(sid, now) for sid, _ in UNDULATE_PAIR):
+                    when, sign = next_extreme(UNDULATE_RATE, UNDULATE_PHASE, now)
+                    depth = UNDULATE_DEPTH * (COILED_UNDULATE if coiled else 1.0)
+                    dur = max(400.0, (when - now) * 1000)
+                    for sid, way in UNDULATE_PAIR:
+                        home = POSE_COIL_DEG[sid] if coiled else reach_pose()[sid]
+                        wp.go(sid, clamp_deg(sid, home + way * sign * depth), dur, now)
+
                 for sid, depth, rate, phase in WRITHE_WAVES:
                     if not wp.free(sid, now):
                         continue  # still travelling; interrupting is the bug
@@ -1285,7 +1314,6 @@ def main() -> None:
                     if sid in POSED_JOINTS:
                         # sway around wherever the strike has left this joint,
                         # and more gently while drawn back than while reaching
-                        coiled = coil in ("coiling", "coiled")
                         home = POSE_COIL_DEG[sid] if coiled else reach_pose()[sid]
                         depth *= COILED_WRITHE if coiled else 1.0
                     else:

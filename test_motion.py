@@ -42,7 +42,7 @@ def main() -> int:
     bad = []
     per_joint: dict[int, float] = {}
     print(f"  {'joint':22s} {'sway':>7s} {'period':>8s} {'cmds/s':>8s} {'slew':>9s}")
-    for sid, label, depth, omega in WRITHE_TERMS:
+    for sid, label, depth, omega, _coiled in WRITHE_TERMS:
         period = 2 * math.pi / omega
         hz = 2.0 / period          # two waypoints per cycle
         slew = depth * omega
@@ -62,13 +62,14 @@ def main() -> int:
             bad.append(f"servo {sid}: {slew:.1f} deg/s exceeds {MAX_JOINT_SLEW:.0f}")
 
     # the sway must not push a joint through a soft stop, in either posture
-    for sid, label, depth, _ in WRITHE_TERMS:
-        for posture, home_of in (("reaching", reach_pose), ("coiled", lambda: POSE_COIL_DEG)):
+    for sid, label, depth, _, coiled_frac in WRITHE_TERMS:
+        for posture, home_of, frac in (("reaching", reach_pose, 1.0),
+                                       ("coiled", lambda: POSE_COIL_DEG, coiled_frac)):
             home = home_of().get(sid, POSE_POINT_DEG.get(sid))
             if home is None:
                 continue
             lo, hi = LIMITS_DEG[sid]
-            for edge in (home - depth, home + depth):
+            for edge in (home - depth * frac, home + depth * frac):
                 if not lo - 1e-6 <= edge <= hi + 1e-6:
                     bad.append(f"servo {sid} {label} reaches {edge:.1f} deg while {posture}, "
                                f"outside {lo}..{hi}")

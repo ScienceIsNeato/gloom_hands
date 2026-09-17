@@ -87,6 +87,21 @@ py gloom.py --eyes --usb
 both build over minutes, and nothing else in the loop would ever choose to
 stop while people keep arriving.
 
+**The undulation is an opposed pair.** The shoulder and elbow are driven
+together, the shoulder `+D` while the elbow goes `-D`, at the same rate and
+the same instant. Their sum is the forearm's angle in the world, so holding
+that sum constant makes the upper arm sweep through a wide arc while the
+forearm counter-rotates by exactly as much: the arm works hard underneath
+while the hand keeps its attitude. Measured in a dry run, the shoulder
+travels 30 degrees peak to peak and the forearm angle does not change at
+all. The wrist only breathes, because it is meant to look steady while that
+happens.
+
+It is also cheaper than moving them independently. The two contributions to
+the centre of mass largely cancel, so a large visible motion costs much less
+change in holding torque than its size suggests — which matters while the
+supply is still the unexplained problem.
+
 **Do not stream poses. Send waypoints.** Measured on the arm with
 `smoothtest.py`: a single four-second command sweeps perfectly smoothly,
 and the same arc sent as a stream of small steps gets rougher the more
