@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The hand still twitches once per message sent to it, and it is worse over the cable, which rules out everything I had been blaming. Built a test that sweeps one joint at five different speeds so we can just watch which one is smooth.",
-    "direction": "Run that test and see whether a single long move is smooth — if it is, the fix is to stop chattering at the arm and send it waypoints instead",
-    "last_update": "2026-09-16T00:00:00Z"
+    "status": "Chasing missed faces on the new wide-angle camera. Grabbed real frames off it and scored them: the good detections and the junk are cleanly separated, so I pulled the cutoff down into the gap and it now catches every frame where someone is actually facing the camera.",
+    "direction": "The camera is aimed too high — most of the picture is ceiling — so the next win is physical aiming, not more tuning. Then a quiet-room recording to confirm it still never fires on nobody.",
+    "last_update": "2026-09-17T00:00:00Z"
   }
 }

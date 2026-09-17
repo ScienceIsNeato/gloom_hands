@@ -377,22 +377,37 @@ def yunet_model_path() -> str | None:
 
 
 class YuNetDetector:
-    """cv2.FaceDetectorYN (YuNet). Returns the highest-scoring face.
-    ``score_threshold`` was 0.45, on the reasoning that a wide lens stretches
-    a face near the edge and the score falls off before the face stops being
-    obvious. True, but it also let through wallpaper and shadows, and a
-    detector that is wrong occasionally is a prop that never sleeps. It is
-    back up, with the temporal gate in Tracker doing the work of catching the
-    edge cases instead: a stretched real face keeps appearing, and a shadow
-    does not. ``face_height_m`` is what its box
-    spans, roughly hairline to chin: ~0.2 m on an adult."""
+    """cv2.FaceDetectorYN (YuNet). Returns the highest-scoring face that is a
+    plausible size.
+    ``score_threshold`` has been both too low (0.45, which let through
+    wallpaper and shadows) and too high (0.70, which dropped real faces on a
+    poor camera). Scoring the prop's own 120-degree webcam settled it: real
+    faces came back at 0.71-0.90 while all 231 other boxes in the sample
+    topped out at 0.45, so the two populations do not overlap at all and 0.55
+    sits in the empty band between them. The size bounds are a second line
+    rather than what makes that gap: they cost nothing and they catch the
+    whole-frame box a blown-out exposure produces, which is the false
+    positive that actually got reported.
+    ``face_height_m`` is what its box spans, roughly hairline to chin:
+    ~0.2 m on an adult."""
 
     def __init__(
         self,
-        scale: float = 0.5,
+        scale: float = 0.75,
         model: str | None = None,
-        score_threshold: float = 0.70,
-        min_face_frac: float = 0.06,   # of frame height; smaller is noise, not a visitor
+        score_threshold: float = 0.55,
+        min_face_frac: float = 0.04,   # of frame height; smaller is noise, not a visitor
+        max_face_frac: float = 0.45,   # bigger than anyone standing in the room can be
+        # Local contrast stretching before detection. A washed-out, grainy
+        # camera gives the detector very little to work with, and its
+        # confidence collapses long before a face stops being visible to a
+        # person. CLAHE equalises in small tiles, so it lifts a face out of
+        # flat lighting without blowing out the bright parts of the room the
+        # way a global stretch would. `clip` is how hard: higher lifts more
+        # contrast and more grain with it.
+        equalise: bool = True,
+        clahe_clip: float = 2.5,
+        clahe_grid: int = 8,
         nms_threshold: float = 0.3,
         face_height_m: float = 0.2,
         debug: bool = False,
@@ -408,6 +423,11 @@ class YuNetDetector:
         self.scale = scale
         self.face_height_m = face_height_m
         self.min_face_frac = min_face_frac
+        self.max_face_frac = max_face_frac
+        self.equalise = equalise
+        self.clahe_clip = clahe_clip
+        self.clahe_grid = clahe_grid
+        self._clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(clahe_grid, clahe_grid))
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
         self.debug = debug
@@ -432,6 +452,19 @@ class YuNetDetector:
     def reset(self) -> None:
         pass
 
+    def _prepare(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """Give the detector a fairer look at a poor picture.
+
+        Only the lightness channel is touched, so colour is untouched and the
+        cost is one small pass. The preview keeps showing the original, since
+        the point is what the camera sees, not what the detector was handed.
+        """
+        if not self.equalise:
+            return frame_bgr
+        lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+        lab[:, :, 0] = self._clahe.apply(lab[:, :, 0])
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
     def detect(self, frame_bgr: np.ndarray) -> Detection | None:
         if self.scale != 1.0:
             frame_bgr = cv2.resize(frame_bgr, (0, 0), fx=self.scale, fy=self.scale)
@@ -440,16 +473,26 @@ class YuNetDetector:
         if (self.frame_w, self.frame_h) != self._size:
             self._size = (self.frame_w, self.frame_h)
             self._net.setInputSize(self._size)
-        _, faces = self._net.detect(frame_bgr)
+        _, faces = self._net.detect(self._prepare(frame_bgr))
         if faces is None or len(faces) == 0:
+            return None
+        # Size first, then pick the winner. Picking the top-scoring box and
+        # then size-checking it throws away the whole frame whenever a blob
+        # outscores the real face sitting underneath it.
+        lo = self.min_face_frac * self.frame_h
+        hi = self.max_face_frac * self.frame_h
+        # Too small is wallpaper, a photograph on a shelf, or sensor grain --
+        # the bulk of what a low threshold lets through. Too big is the other
+        # half: on a washed-out camera an exposure shift makes the detector
+        # call a wall or half the room a face. Nobody's head fills 45% of the
+        # frame at any distance this prop can reach them from, so both ends
+        # are geometry, not guesswork, and cutting them lets the score
+        # threshold come down to where real faces at the edge survive.
+        faces = faces[(faces[:, 3] >= lo) & (faces[:, 3] <= hi)]
+        if len(faces) == 0:
             return None
         best = faces[int(np.argmax(faces[:, 14]))]
         x, y, w, h, score = (float(v) for v in (best[0], best[1], best[2], best[3], best[14]))
-        # A face too small to be anybody in the room. Wallpaper, a photograph
-        # on a shelf and compression noise all produce these, and they are the
-        # bulk of what a low threshold lets through.
-        if h < self.min_face_frac * self.frame_h:
-            return None
         return Detection(
             x=x + w / 2.0, top=y, bottom=y + h,
             frame_w=self.frame_w, frame_h=self.frame_h, weight=score,
