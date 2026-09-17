@@ -242,6 +242,20 @@ comes up empty, provided the blob is person-sized. Precision about where
 someone's face is matters less than noticing they are there at all; once
 a track exists, a face reasserts itself the moment one is visible.
 
+**Nothing opens a track on one frame.** A detection has to keep appearing,
+in roughly the same place, for `confirm_s` before anything downstream hears
+about it. A face detector will occasionally find a face in wallpaper or a
+shadow, but it will not find the same one there half a second later.
+Anything shorter is a blip: counted, written to the log, and otherwise
+ignored. This is the single biggest lever on false positives and it costs
+only that half second of response.
+
+That gate is why YuNet's score threshold went back up to 0.70 with a
+minimum face size: a low threshold was letting through wallpaper on the
+reasoning that a stretched face at the frame edge scores poorly, but the
+temporal gate catches that case better — a real face keeps appearing and a
+shadow does not.
+
 A blob may raise the alarm, but only a face keeps it up: a track the face
 detector has never confirmed is dropped after `prove_by_s`. Without that, a
 lighting change or a shifted chair could hold the arm awake indefinitely,

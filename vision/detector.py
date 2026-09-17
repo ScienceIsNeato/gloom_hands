@@ -378,18 +378,21 @@ def yunet_model_path() -> str | None:
 
 class YuNetDetector:
     """cv2.FaceDetectorYN (YuNet). Returns the highest-scoring face.
-    ``score_threshold`` is deliberately low. A wide-angle lens stretches and
-    turns a face near the frame edge, and the score falls off well before the
-    face becomes unrecognisable to a person looking at it; the cost of a
-    false positive here is only that the arm wakes up. Raise it if it ever
-    locks onto a poster. ``face_height_m`` is what its box
+    ``score_threshold`` was 0.45, on the reasoning that a wide lens stretches
+    a face near the edge and the score falls off before the face stops being
+    obvious. True, but it also let through wallpaper and shadows, and a
+    detector that is wrong occasionally is a prop that never sleeps. It is
+    back up, with the temporal gate in Tracker doing the work of catching the
+    edge cases instead: a stretched real face keeps appearing, and a shadow
+    does not. ``face_height_m`` is what its box
     spans, roughly hairline to chin: ~0.2 m on an adult."""
 
     def __init__(
         self,
         scale: float = 0.5,
         model: str | None = None,
-        score_threshold: float = 0.45,
+        score_threshold: float = 0.70,
+        min_face_frac: float = 0.06,   # of frame height; smaller is noise, not a visitor
         nms_threshold: float = 0.3,
         face_height_m: float = 0.2,
         debug: bool = False,
@@ -439,6 +442,11 @@ class YuNetDetector:
             return None
         best = faces[int(np.argmax(faces[:, 14]))]
         x, y, w, h, score = (float(v) for v in (best[0], best[1], best[2], best[3], best[14]))
+        # A face too small to be anybody in the room. Wallpaper, a photograph
+        # on a shelf and compression noise all produce these, and they are the
+        # bulk of what a low threshold lets through.
+        if h < self.min_face_frac * self.frame_h:
+            return None
         return Detection(
             x=x + w / 2.0, top=y, bottom=y + h,
             frame_w=self.frame_w, frame_h=self.frame_h, weight=score,

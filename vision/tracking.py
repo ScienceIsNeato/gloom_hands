@@ -4,7 +4,10 @@ A detector answers "is there a person in THIS frame?" with no memory, so
 its output flickers whenever a face turns or a blob splits. That is not
 how people move. ``Tracker`` keeps one track alive across frames:
 
-* a hit from the primary detector STARTS the track, and so does the
+* NOTHING starts a track on one frame. A detection has to keep appearing,
+  in roughly the same place, for CONFIRM_S before a track opens at all.
+  Anything shorter is a blip: counted, reported, and otherwise ignored.
+* a confirmed run from the primary detector STARTS the track, and so does the
   secondary when the primary has come up empty — a face at the edge of a
   wide lens is stretched and turned away, and a face detector simply will
   not see it, but the blob detector sees anything person-shaped anywhere in
@@ -56,6 +59,14 @@ class Tracker:
         primary,
         secondary=None,
         coast_s: float = 2.5,
+        # How long a detection must keep turning up, in roughly one place,
+        # before it is allowed to open a track. One frame of anything is not
+        # a person: a face detector will occasionally find a face in wallpaper
+        # or a shadow, but it will not find the same one there half a second
+        # later. This is the single biggest lever on false positives, and it
+        # costs only that half second of response.
+        confirm_s: float = 0.5,
+        confirm_gate_frac: float = 0.15,    # how far a candidate may wander and still count
         acquire_on_secondary: bool = True,
         # What the blob detector must look like before it is allowed to open a
         # track. Letting it in on size alone was a mistake: a webcam adjusting
@@ -83,6 +94,8 @@ class Tracker:
         self.primary = primary
         self.secondary = secondary
         self.coast_s = coast_s
+        self.confirm_s = confirm_s
+        self.confirm_gate_frac = confirm_gate_frac
         self.acquire_on_secondary = acquire_on_secondary
         self.min_secondary_frac = min_secondary_frac
         self.max_secondary_frac = max_secondary_frac
@@ -92,6 +105,9 @@ class Tracker:
         self.prove_by_s = prove_by_s
         self._cand = 0
         self._cand_x = None
+        self._pend: dict[str, object] | None = None   # the candidate being watched
+        self.blips = 0            # detections that never lasted long enough
+        self.last_blip = ""       # and what the most recent one was
         self.gate_frac = gate_frac
         self.size_alpha = size_alpha
         self.pos_alpha = pos_alpha
@@ -134,6 +150,7 @@ class Tracker:
         self._track = None
         self._far_hits = 0
         self._cand, self._cand_x = 0, None
+        self._pend = None
         self._last_t = None
 
     # -- the work --------------------------------------------------------- #
@@ -147,6 +164,37 @@ class Tracker:
         # never extrapolated when unconfirmed.
         t = self._track
         return t.x if t is None else t.x + t.vx * min(dt, 0.5)
+
+    def _candidate(self, d: Detection, now: float, source: str) -> bool:
+        """Has this detection been turning up in one place for long enough?
+
+        Returns True exactly once, on the reading that completes the run.
+        A detection somewhere else, or after a gap, starts the count again
+        and the abandoned one is recorded as a blip.
+        """
+        gate = self.confirm_gate_frac * max(1, d.frame_w)
+        p = self._pend
+        fresh = (p is None or p["source"] != source
+                 or abs(d.x - float(p["x"])) > gate
+                 or now - float(p["last"]) > 0.6)
+        if fresh:
+            if p is not None and float(p["last"]) - float(p["since"]) < self.confirm_s:
+                self.blips += 1
+                self.last_blip = (f"{p['source']} at x={float(p['x']):.0f} for "
+                                  f"{float(p['last']) - float(p['since']):.2f}s")
+            self._pend = {"since": now, "x": d.x, "last": now, "n": 1, "source": source}
+            return False
+        p["x"], p["last"], p["n"] = d.x, now, int(p["n"]) + 1
+        return (now - float(p["since"])) >= self.confirm_s and int(p["n"]) >= 2
+
+    def _forget_candidate(self, now: float) -> None:
+        p = self._pend
+        if p is not None:
+            if float(p["last"]) - float(p["since"]) < self.confirm_s:
+                self.blips += 1
+                self.last_blip = (f"{p['source']} at x={float(p['x']):.0f} for "
+                                  f"{float(p['last']) - float(p['since']):.2f}s")
+            self._pend = None
 
     def person_shaped(self, d: Detection) -> bool:
         """Could this blob be a person standing there?
@@ -212,6 +260,10 @@ class Tracker:
 
         if t is None:
             if hit is not None:
+                if not self._candidate(hit, now, "face"):
+                    self.last_source = ""
+                    return None      # seen, but not for long enough to believe
+                self._pend = None
                 self._start(hit, now)
                 self.last_source = "primary"
                 return self._report(now)
@@ -224,18 +276,15 @@ class Tracker:
             if self.secondary is not None and self.acquire_on_secondary:
                 s = self.secondary.detect(frame_bgr)
                 if s is not None and self.person_shaped(s):
-                    # and it has to still be there, in the same place, a few
-                    # frames later. One frame of anything is not a person.
-                    near = self._cand_x is not None and abs(s.x - self._cand_x) <= 0.2 * s.frame_w
-                    self._cand = self._cand + 1 if near else 1
-                    self._cand_x = s.x
-                    if self._cand >= self.secondary_confirm:
-                        self._cand, self._cand_x = 0, None
+                    if self._candidate(s, now, "blob"):
+                        self._pend = None
                         self._start(self._rescale(s), now, proven=False)
                         self.last_source = "secondary"
                         return self._report(now)
                 else:
-                    self._cand, self._cand_x = 0, None
+                    self._forget_candidate(now)
+            if hit is None and (self.secondary is None or not self.acquire_on_secondary):
+                self._forget_candidate(now)
             self.last_source = ""
             return None
 

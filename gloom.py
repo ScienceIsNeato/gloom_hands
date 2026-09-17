@@ -591,6 +591,7 @@ class Eyes:
         self._smooth = Smoother(window=LOCK_SMOOTH)
         self._last_base, self._last_at = 0.0, time.monotonic()
         self.confirmed = False  # was the latest look a real sighting, or coasted?
+        self._blips_at = 0      # tracker blip count at the last report
         self._frame = None
         self._ended = False
         self._lock = threading.Lock()
@@ -644,6 +645,20 @@ class Eyes:
             return 0.0
         frac = max(-1.0, min(1.0, (t.bearing_deg - centre) / half))
         return frac * self._reach
+
+    @property
+    def blips(self) -> int:
+        """Detections since the last report that never lasted long enough to
+        be believed. Worth logging: a rising count means the detector is
+        seeing things, even though none of them reached the arm."""
+        return getattr(self._det, "blips", 0) - self._blips_at
+
+    @property
+    def last_blip(self) -> str:
+        return getattr(self._det, "last_blip", "")
+
+    def reset_blips(self) -> None:
+        self._blips_at = getattr(self._det, "blips", 0)
 
     def _pump(self) -> None:
         while True:
@@ -1243,6 +1258,10 @@ def main() -> None:
 
             if now - last_sample >= 5.0:
                 last_sample = now
+                blips = getattr(eyes, "blips", 0) if eyes else 0
+                if blips:
+                    log.event(now, "blips", n=blips, last=getattr(eyes, "last_blip", ""))
+                    eyes.reset_blips()
                 log.event(now, "tick",
                           state=("slack" if not awake else ("track" if locked else "search")),
                           coil=coil, base=base, volts=(volts if volts is not None else "?"),
