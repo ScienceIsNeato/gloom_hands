@@ -1158,7 +1158,8 @@ def main() -> None:
                               f"{t.cam_bearing_deg:+.1f} deg -> base {base:+.1f} deg")
                         if not greeted:
                             greeted = True
-                            anim.to(POSE_COIL_DEG, COIL_MS, now)
+                            for _sid, _deg in POSE_COIL_DEG.items():
+                                wp.go(_sid, _deg, COIL_MS, now)
                             coil = "coiling"
                             coil_at, hold_override = now + COIL_MS / 1000, GREET_HOLD_S
                         else:
