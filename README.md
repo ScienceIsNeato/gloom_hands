@@ -187,6 +187,11 @@ in a corner doing nothing, so its resting state is genuinely off:
 sighting restarts that clock, so an occupied room keeps it awake and an
 empty one releases it. From slack, a face held for `WAKE_AFTER_S` brings it
 back; that delay is a debounce, so one spurious detection cannot raise it.
+It counts CONFIRMED sightings only. The tracker coasts for a second and a
+half after losing someone, which is right while following them and wrong as
+evidence that anyone is there — one stray detection used to buy 1.5s of
+apparent "face held" on its own, and a second stray hit inside that window
+cleared the threshold between them.
 
 `POSE_SLACK_DEG` is not a pose it holds. It is where the arm stands a moment
 before the power is cut, chosen so that letting go barely moves it: vertical

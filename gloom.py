@@ -280,7 +280,13 @@ LOCK_SMOOTH = 2         # readings averaged while locked (at TICK rate; small = 
 # Every sighting restarts the SEARCH_S clock, so a room with people in it
 # keeps the arm awake and an empty one lets it go within SEARCH_S.
 SEARCH_S = 30.0         # seconds hunting with nobody in sight before it lets go
-WAKE_AFTER_S = 2.0      # continuous face needed to wake it (a debounce; 0 to disable)
+# Continuous face needed to wake it. Counted in CONFIRMED sightings only:
+# the tracker coasts for TRACK_COAST_S after losing someone, so one stray
+# detection used to buy 1.5s of apparent "face held" on its own, and a second
+# stray hit anywhere inside that window cleared the threshold between them.
+# Riding through a blink is right while following somebody and wrong when
+# deciding whether anybody is there.
+WAKE_AFTER_S = 2.0      # (a debounce; 0 to disable)
 WAKE_MS = 2200          # how gently it rises — it has been hanging slack
 # RUNNING FOR DAYS. Two things accumulate while the arm is busy and neither
 # shows up in a short test: heat in the servos that are holding weight, and
@@ -569,6 +575,7 @@ class Eyes:
               f"(true angle at {TRACK_NOMINAL_M:.1f} m would be {self._frame_span():.0f})")
         self._smooth = Smoother(window=LOCK_SMOOTH)
         self._last_base, self._last_at = 0.0, time.monotonic()
+        self.confirmed = False  # was the latest look a real sighting, or coasted?
         self._frame = None
         self._ended = False
         self._lock = threading.Lock()
@@ -647,6 +654,11 @@ class Eyes:
             return None
         t0 = time.perf_counter()
         d = self._det.detect(frame)
+        # Did a detector actually SEE something this frame, or is the tracker
+        # carrying an old sighting forward? Riding through a blink is exactly
+        # what coasting is for while following someone, but it must not be
+        # mistaken for evidence when deciding whether anyone is there at all.
+        self.confirmed = d is not None and not d.coasting
         t = self._loc.locate(d) if d is not None else None
         if self._show:
             self._draw(d, t, 1000 * (time.perf_counter() - t0))
@@ -1099,6 +1111,7 @@ def main() -> None:
     frozen_until = 0.0
     last_seen = 0.0       # when the eyes last saw someone; also the SEARCH_S clock
     seen_since = None     # when the CURRENT unbroken run of sightings began
+    solid_since = None    # ...counting only confirmed ones, for the wake decision
     locked = False
     greeted = False       # has it made its entrance since it last woke?
     warming = False       # a reconnect already started for this sighting
@@ -1238,10 +1251,15 @@ def main() -> None:
                     seen_since = None
                 elif seen_since is None:
                     seen_since = now
+                # A separate clock for waking, which only real sightings feed.
+                if not eyes.confirmed:
+                    solid_since = None
+                elif solid_since is None:
+                    solid_since = now
 
                 if not awake:
                     # --- SLACK: unpowered, just watching ------------------- #
-                    held = 0.0 if seen_since is None else now - seen_since
+                    held = 0.0 if solid_since is None else now - solid_since
                     # Start reconnecting the moment a face appears, so the link
                     # is up by the time the wake threshold passes instead of
                     # costing several seconds after it.
@@ -1302,7 +1320,8 @@ def main() -> None:
                     if cooldown:
                         print(f"  (resting {cooldown:.0f}s before it will wake again)")
                     awake, locked, greeted, coil = False, False, False, "out"
-                    seen_since, last_unload, slept_at, last_report = None, now, now, now
+                    seen_since = solid_since = None
+                    last_unload, slept_at, last_report = now, now, now
                     low_since = None
                     continue
 
