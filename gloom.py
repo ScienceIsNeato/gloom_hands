@@ -885,20 +885,23 @@ def aim_pose(t: float, elevation_deg: float, coiled: bool) -> dict[int, float]:
     """The three pitch joints: the arm coiling freely underneath, and the
     wrist taking whatever is left so the hand keeps pointing at the face.
 
-    While drawn back the hand cannot reach the face at all — the arm is
-    folded behind itself — so the wrist simply follows the coil pose and
-    resumes aiming when it comes back out.
+    While drawn back the hand cannot reach the face — the arm is folded
+    behind itself — so it holds the pitch the coil pose was dialled to
+    instead, and resumes aiming when it comes back out. It still OPPOSES the
+    arm either way: the shoulder and elbow carry the hand's pitch with them,
+    so a wrist sitting at a fixed angle means the palm just points wherever
+    the arm last swung it. Left over is not the same as left alone.
     """
     base_pose = POSE_COIL_DEG if coiled else reach_pose()
     ds, de = undulate_at(t, coiled)
     sh = clamp_deg(5, base_pose[5] + ds)
     el = clamp_deg(4, base_pose[4] + de)
     if coiled:
-        wr = clamp_deg(3, POSE_COIL_DEG[3])
+        # the pitch the coiled pose was tuned to, held against the undulation
+        want = POSE_COIL_DEG[5] + POSE_COIL_DEG[4] + POSE_COIL_DEG[3]
     else:
         want = HAND_AIM_ZERO + HAND_AIM_GAIN * elevation_deg
-        wr = clamp_deg(3, want - sh - el)
-    return {5: sh, 4: el, 3: wr}
+    return {5: sh, 4: el, 3: clamp_deg(3, want - sh - el)}
 
 #: Joints the strike also drives. Their writhe has to oscillate around
 #: whatever posture the strike has put them in, not around a fixed pose.
@@ -1309,11 +1312,20 @@ def main() -> None:
                 if coil == "out":
                     print("...drawing back")
                     log.event(now, "coil", base=base, volts=(volts if volts else "?"))
+                    # The wave still sets off inward, wrist first, but every
+                    # joint ARRIVES together: each one's travel is stretched by
+                    # the time it waited. Otherwise the wrist reaches its angle
+                    # while the shoulder still has 84 degrees to lean, and then
+                    # sits there while the arm swings out from under the hand —
+                    # which is the wrist looking static exactly when it should
+                    # be working hardest.
+                    last = len(COIL_ORDER) - 1
                     for i, sid in enumerate(COIL_ORDER):
-                        wp.go(sid, POSE_COIL_DEG[sid], COIL_MS, now,
+                        wp.go(sid, POSE_COIL_DEG[sid],
+                              COIL_MS + (last - i) * COIL_STAGGER_S * 1000, now,
                               at=now + i * COIL_STAGGER_S)
                     coil = "coiling"
-                    coil_at = now + (len(COIL_ORDER) - 1) * COIL_STAGGER_S + COIL_MS / 1000
+                    coil_at = now + last * COIL_STAGGER_S + COIL_MS / 1000
                 elif coil == "coiling":
                     coil = "coiled"
                     coil_at = now + (hold_override or random.uniform(*COIL_HOLD_S))
