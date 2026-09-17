@@ -141,13 +141,23 @@ NOD_DEPTH, NOD_RATE = 3.5, 0.95         # wrist bend, barely
 # simply mirroring each other — and whatever they fail to cancel, the wrist
 # takes up. That residual is what gives the wrist its own live correction
 # rather than a dead stare.
-SHOULDER_SWING = 26.0   # degrees either side of its resting angle
-ELBOW_SWING = 28.0      # and the elbow's, counter-rotating
+# THE HEAD HOLDS STILL; THE BODY MOVES UNDER IT. These were 26 and 28, which
+# swung the shoulder through 110 degrees once the coil is included and threw
+# the gripper from the table top to straight overhead — a flailing arm, not a
+# snake. Two things keep the hand quiet now. The swings are small. And the
+# elbow exactly opposes the shoulder, so the FOREARM holds its angle in space
+# and only the upper arm's rotation moves the hand at all, which is a far
+# smaller arc than the two joints compounding.
+#
+# Raising these is the thing most likely to bring the flailing back. If more
+# life is wanted, take it from UNDULATE_RATE or from the wrist, not from here.
+SHOULDER_SWING = 7.0    # degrees either side of its resting angle
+ELBOW_SWING = 7.0       # and the elbow's, exactly opposing it
 UNDULATE_RATE = 0.95    # slow: this is a body roll, not a tremor
 UNDULATE_PHASE = 0.4
-UNDULATE_LAG = 0.55     # radians off exact opposition. 0 = perfect mirror and a
-                        # perfectly still wrist; larger sends a wave along the arm
-                        # and leaves the wrist more to correct.
+UNDULATE_LAG = 0.0      # radians off exact opposition. 0 = the forearm keeps its
+                        # angle in space, which is what holds the hand steady;
+                        # larger sends a wave along the arm and moves the hand more.
 # The coil folds the elbow to -100 and its soft stop is -108, so the swing in
 # there cannot exceed 8 degrees without clipping — and a clipped sine is a
 # flat spot, which is exactly the dead-looking motion being removed.
