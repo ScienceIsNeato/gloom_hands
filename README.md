@@ -421,6 +421,8 @@ moves as one, and the crack comes from the wrist overshooting as it lands.
 - `test_geometry.py` — hand-computed checks for the camera-offset trig; no hardware needed
 - `test_motion.py` — writhe budgets: is each oscillator slow enough to render, and to afford?
 - `test_backends.py` — the real and dry backends must keep the same surface
+- `test_detectors.py` — every constructor argument must actually be stored, and
+  `detect()` must survive a real hit, not just an empty room
 - `smoothtest.py` — why is the motion jerky? Sweeps one joint at several
   command rates, and at two packet sizes, so the cause can be watched rather
   than argued about. Bypasses the hunt's streaming entirely.

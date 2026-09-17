@@ -1,0 +1,27 @@
+# ---- run started 2026-09-17T16:58:04
+16:58:04	      0.0	start	eyes=face link=ble search_s=30.0 active_max_s=240.0
+16:58:04	      0.0	tick	state=search coil=out base=0.0 volts=? awake_for=0.0 look_ms=0.0 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:58:09	      5.1	tick	state=search coil=out base=37.0 volts=? awake_for=5.1 look_ms=137.6 send_ms=0.1 late=0 gap_ms=220.0 pkts_per_s=3.0
+16:58:14	     10.2	blips	n=1 last=blob at x=158 for 0.00s
+16:58:14	     10.2	tick	state=search coil=out base=-52.8 volts=? awake_for=10.2 look_ms=28.9 send_ms=0.1 late=0 gap_ms=220.0 pkts_per_s=2.8
+16:58:19	     15.2	tick	state=search coil=out base=27.9 volts=? awake_for=15.2 look_ms=28.5 send_ms=0.1 late=0 gap_ms=220.0 pkts_per_s=2.4
+16:58:24	     20.3	blips	n=2 last=blob at x=98 for 0.00s
+16:58:24	     20.3	tick	state=search coil=out base=33.0 volts=? awake_for=20.3 look_ms=29.8 send_ms=0.1 late=0 gap_ms=220.0 pkts_per_s=2.4
+16:58:29	     25.4	tick	state=search coil=out base=-53.0 volts=? awake_for=25.4 look_ms=29.8 send_ms=0.1 late=0 gap_ms=220.0 pkts_per_s=2.8
+16:58:34	     30.1	slack	reason=nothing for 30s cooldown_s=0.0 awake_for=30.1 volts=?
+16:58:37	     32.9	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=39.8 send_ms=0.1 late=0 gap_ms=220.0 pkts_per_s=2.4
+16:58:42	     38.0	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=28.7 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:58:47	     43.1	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=29.6 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:58:52	     48.2	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=27.8 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:58:57	     53.2	blips	n=1 last=blob at x=129 for 0.00s
+16:58:57	     53.2	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=27.8 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:59:02	     58.3	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=28.9 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:59:07	     63.4	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=27.7 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:59:12	     68.5	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=29.9 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:59:17	     73.6	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=29.3 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:59:22	     78.7	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=27.7 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+16:59:27	     83.7	tick	state=slack coil=out base=25.6 volts=? awake_for=0.0 look_ms=29.4 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+# ---- run started 2026-09-17T17:18:41
+17:18:41	      0.0	start	eyes=face link=ble search_s=30.0 active_max_s=240.0
+17:18:41	      0.0	tick	state=search coil=out base=0.0 volts=? awake_for=0.0 look_ms=0.0 send_ms=0.0 late=0 gap_ms=220.0 pkts_per_s=0.0
+# ---- run ended cleanly

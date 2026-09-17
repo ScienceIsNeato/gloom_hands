@@ -407,6 +407,9 @@ class YuNetDetector:
             )
         self.scale = scale
         self.face_height_m = face_height_m
+        self.min_face_frac = min_face_frac
+        self.score_threshold = score_threshold
+        self.nms_threshold = nms_threshold
         self.debug = debug
         try:
             self._net = cv2.FaceDetectorYN.create(
