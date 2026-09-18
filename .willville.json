@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "The robot arm obeys the laptop now, wired or wireless, and has its first personality: a Zelda gloom hand that sweeps around looking for victims",
-    "direction": "Tune the hunting pose on the real hardware, then give it eyes — a webcam so it locks onto people it finds",
-    "last_update": "2026-09-05T07:18:51Z"
+    "status": "Pulled the strike back another notch so the arm does not stretch out quite as far when it lunges — that is the part that was making a servo complain. Wrote down the actual numbers this time so the next person can see how much that dial really buys.",
+    "direction": "See whether it still complains after a few lunges. If it does, the dial is not the answer and the real lever is how long it sits out there versus curled up.",
+    "last_update": "2026-09-18T00:00:00Z"
   }
 }

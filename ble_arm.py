@@ -17,16 +17,48 @@ it exactly like the USB controller.
 from __future__ import annotations
 
 import asyncio
+import sys as _sys
 import threading
+import time
 from pathlib import Path
 
 from bleak import BleakClient, BleakScanner
 
 SERVICE_HINT = "ffe0"
 CMD_SERVO_MOVE = 0x03
+CMD_SERVO_STOP = 0x14  # "unload": cut the motors so the joints go limp
 # The arm's address is cached after the first find so later runs connect
 # in ~1-2s instead of sitting through a full discovery sweep.
 ADDRESS_CACHE = Path(__file__).with_name(".xarm_ble_address")
+
+
+def _cached_address() -> str | None:
+    """The arm's address from a previous run on THIS platform, if any.
+
+    macOS reports a CoreBluetooth UUID that is meaningless anywhere else,
+    Windows and Linux report a MAC; a cache written on one is useless on
+    the other, so the file records which platform wrote it.
+    """
+    if not ADDRESS_CACHE.exists():
+        return None
+    lines = [ln.strip() for ln in ADDRESS_CACHE.read_text().splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        return lines[1] if lines[0] == _sys.platform else None
+    return lines[0] if lines else None  # pre-tag cache from an older version
+
+
+async def _release(client: BleakClient) -> None:
+    """Hand a half-connected peripheral back to the OS.
+
+    A client whose connect was cancelled may still be connected, or about to
+    be. Disconnecting is the only way to tell the OS to let go; if we simply
+    drop the reference the arm can sit connected to nothing and stop
+    advertising, and no amount of scanning will find it again.
+    """
+    try:
+        await client.disconnect()
+    except Exception:  # noqa: BLE001 - it may never have opened; that is fine
+        pass
 
 
 def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
@@ -37,6 +69,11 @@ def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
     return bytes([0x55, 0x55, len(params) + 2, CMD_SERVO_MOVE] + params)
 
 
+def servo_unload_packet(servo_ids: list[int]) -> bytes:
+    params = [len(servo_ids)] + list(servo_ids)
+    return bytes([0x55, 0x55, len(params) + 2, CMD_SERVO_STOP] + params)
+
+
 class BleArm:
     """Synchronous facade over an async BLE link to the arm."""
 
@@ -45,50 +82,189 @@ class BleArm:
         name_hints: tuple[str, ...] = ("xarm", "hiwonder", "lobot"),
         timeout: float = 12.0,
     ) -> None:
+        # Only one thread may talk to the radio at a time. Two concurrent
+        # connects to the same address is how this link got wedged: both
+        # raced, one won at the OS level after its coroutine had already been
+        # cancelled, and the arm ended up connected to an object nothing held
+        # a reference to. A connected peripheral stops advertising, so every
+        # later scan found nothing until the process died and released it.
+        self._dialling = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._thread.start()
         self._client: BleakClient | None = None
         self._char = None
-        self._run(self._connect(name_hints, timeout))
+        self._name_hints = name_hints
+        self._timeout = timeout
+        self._pending: bytes | None = None   # newest position packet not yet written
+        self._writing = False                # a drain task is running
+        self.write_errors = 0
+        self.writes_done = 0
+        self._last_write = None
+        self.write_interval_ms = 0.0   # measured spacing of packets ACTUALLY leaving
+        with self._dialling:
+            self._run(self._connect(name_hints, timeout))
 
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
-    async def _connect(self, name_hints: tuple[str, ...], timeout: float) -> None:
-        device = None
-        # Fast path: directed lookup of the cached address (returns the
-        # moment the arm advertises; stale cache falls through to a scan).
-        if ADDRESS_CACHE.exists():
-            addr = ADDRESS_CACHE.read_text().strip()
-            if addr:
-                device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
-        if device is None:
-            # Filtered scan: stops as soon as a matching name appears
-            # instead of sweeping for the full timeout.
-            device = await BleakScanner.find_device_by_filter(
-                lambda d, ad: bool(d.name and any(h in d.name.lower() for h in name_hints)),
-                timeout=timeout,
-            )
-        if device is None:
-            raise RuntimeError(
-                f"no BLE device named like {name_hints} found — arm powered on? "
-                "phone app fully closed (it hogs the only connection)?"
-            )
-        ADDRESS_CACHE.write_text(device.address)
-        self._client = BleakClient(device)
-        await self._client.connect()
-        # The vendor UART service: pick its writable characteristic.
-        for service in self._client.services:
+    async def _bind(self, client: BleakClient, label: str) -> None:
+        """Connect, find the writable characteristic, and keep the client."""
+        await client.connect()
+        self._client = client
+        self._char = None
+        for service in client.services:
             if SERVICE_HINT in service.uuid.lower():
                 for ch in service.characteristics:
                     if "write" in ch.properties or "write-without-response" in ch.properties:
                         self._char = ch
                         break
         if self._char is None:
-            uuids = [s.uuid for s in self._client.services]
+            uuids = [svc.uuid for svc in client.services]
+            await client.disconnect()
+            self._client = None
             raise RuntimeError(f"no writable characteristic under {SERVICE_HINT}; services: {uuids}")
-        print(f"connected: {device.name} ({device.address}), char {self._char.uuid}")
+        print(f"connected: {label}, char {self._char.uuid}")
+
+    async def _connect(self, name_hints: tuple[str, ...], timeout: float, attempts: int = 3) -> None:
+        # FAST PATH: dial the cached address with no discovery at all. Scanning
+        # is what makes a reconnect cost seconds, and the arm goes to sleep and
+        # wakes often enough that those seconds are the whole user experience.
+        addr = _cached_address()
+        if addr:
+            # Held in a local so a timeout can still close it. wait_for cancels
+            # the coroutine but cannot cancel the connect the OS has already
+            # started, so without this the peripheral can come up owned by an
+            # object we have thrown away -- and then it never advertises again.
+            client = BleakClient(addr, disconnected_callback=self._on_disconnect)
+            try:
+                await asyncio.wait_for(self._bind(client, addr), timeout=6.0)
+                return
+            except Exception:  # noqa: BLE001 - stale cache or asleep; fall back to a scan
+                self._client, self._char = None, None
+                await _release(client)
+
+        device = None
+        for attempt in range(1, attempts + 1):
+            if addr:
+                device = await BleakScanner.find_device_by_address(addr, timeout=4.0)
+            if device is None:
+                # Filtered scan: stops as soon as a matching name appears
+                # instead of sweeping for the full timeout.
+                device = await BleakScanner.find_device_by_filter(
+                    lambda d, ad: bool(d.name and any(h in d.name.lower() for h in name_hints)),
+                    timeout=timeout,
+                )
+            if device is not None:
+                break
+            if attempt < attempts:
+                # The board re-advertises a few seconds after a link drops.
+                print(f"arm not advertising yet (attempt {attempt}/{attempts}); retrying...")
+                await asyncio.sleep(2.0)
+        if device is None:
+            raise RuntimeError(
+                f"no BLE device named like {name_hints} found — arm powered on? "
+                "phone app fully closed (it hogs the only connection)? another "
+                "script still running (pgrep -fl 'gloom.py|pose.py|teleop.py')?"
+            )
+        ADDRESS_CACHE.write_text(f"{_sys.platform}\n{device.address}\n")
+        client = BleakClient(device, disconnected_callback=self._on_disconnect)
+        try:
+            await self._bind(client, f"{device.name} ({device.address})")
+        except Exception:
+            self._client, self._char = None, None
+            await _release(client)
+            raise
+
+    def _on_disconnect(self, _client: BleakClient) -> None:
+        # Fast multi-servo moves can brown out the controller's radio; the
+        # next write will notice and reconnect.
+        print("arm: Bluetooth link dropped")
+
+    @property
+    def connected(self) -> bool:
+        return self._client is not None and self._client.is_connected
+
+    def reconnect(self) -> None:
+        """Re-establish the link (the board keeps its address, so this is
+        usually a 1-2 s directed connect rather than a scan).
+
+        Serialised: a second caller waits and then finds the link already up,
+        rather than starting a competing connect to the same address.
+        """
+        with self._dialling:
+            if self.connected:
+                return
+            self._reconnect()
+
+    def _reconnect(self) -> None:
+        print("arm: reconnecting...")
+        try:
+            if self._client is not None:
+                self._run(self._client.disconnect())
+        except Exception:  # noqa: BLE001 - already gone; that's fine
+            pass
+        self._client = None
+        self._char = None
+        self._run(self._connect(self._name_hints, self._timeout))
+
+    def _write(self, packet: bytes) -> None:
+        try:
+            if not self.connected:
+                raise ConnectionError("not connected")
+            self._run(self._client.write_gatt_char(self._char, packet, response=False))
+        except Exception as first:  # noqa: BLE001 - bleak raises several types
+            self.reconnect()  # raises if the arm cannot be found
+            try:
+                self._run(self._client.write_gatt_char(self._char, packet, response=False))
+            except Exception as err:  # noqa: BLE001
+                raise ConnectionError(f"arm write failed after reconnect: {err}") from first
+
+    def write_latest(self, packet: bytes) -> None:
+        """Queue a packet, discarding any earlier one still waiting.
+
+        Never blocks the caller. A Bluetooth write can take a good fraction
+        of a tick — longer on Windows — and waiting for each one made the
+        loop period the tick PLUS the write, so the arm moved in fewer,
+        unevenly spaced steps. That is what jerky looks like.
+
+        Dropping a superseded packet is not a loss: each one is a complete
+        absolute posture, so an older one waiting behind a newer one would
+        only command a pose the arm has already moved past.
+        """
+        self._pending = packet
+        if not self._writing:
+            self._writing = True
+            asyncio.run_coroutine_threadsafe(self._drain(), self._loop)
+
+    async def _drain(self) -> None:
+        try:
+            while True:
+                packet, self._pending = self._pending, None
+                if packet is None:
+                    return
+                try:
+                    if self._client is None or not self._client.is_connected:
+                        raise ConnectionError("not connected")
+                    await self._client.write_gatt_char(self._char, packet, response=False)
+                    self.writes_done += 1
+                    # How fast this link really is. The loop's own cadence says
+                    # nothing about it: a packet superseded before it went out
+                    # never reached the arm, and the move duration has to
+                    # outlast the gap between the ones that did.
+                    t = time.monotonic()
+                    if self._last_write is not None:
+                        gap = (t - self._last_write) * 1000.0
+                        if gap < 2000:
+                            self.write_interval_ms = (gap if not self.write_interval_ms
+                                                      else 0.7 * self.write_interval_ms + 0.3 * gap)
+                    self._last_write = t
+                except Exception:  # noqa: BLE001 - the sync side reconnects; do not stall here
+                    self.write_errors += 1
+                    self._pending = None
+                    return
+        finally:
+            self._writing = False
 
     def set_position(
         self, moves: int | list[tuple[int, int]], pos: int | None = None, duration_ms: int = 1500
@@ -97,7 +273,9 @@ class BleArm:
         if isinstance(moves, int):
             moves = [(moves, int(pos))]  # type: ignore[arg-type]
         packet = servo_move_packet(moves, duration_ms)
-        self._run(self._client.write_gatt_char(self._char, packet, response=False))
+        if not self.connected:
+            self.reconnect()  # rare, and worth blocking for
+        self.write_latest(packet)
 
     def set_angle(
         self,
@@ -115,7 +293,43 @@ class BleArm:
             moves = [(moves, float(deg))]  # type: ignore[arg-type]
         self.set_position([(sid, servo_units(sid, d)) for sid, d in moves], duration_ms=duration_ms)
 
+    def unload(self, servo_ids: list[int] | None = None, repeat: int = 3) -> None:
+        """Cut the motors. The joints go limp and can be moved by hand.
+
+        Sent more than once on purpose. These writes are fire-and-forget —
+        the board never acknowledges them — so a single dropped packet would
+        leave the arm holding its pose, drawing current, indefinitely. The
+        command is idempotent, so repeating it costs nothing and removes the
+        one failure that actually matters here.
+        """
+        packet = servo_unload_packet(servo_ids or [1, 2, 3, 4, 5, 6])
+        for i in range(max(1, repeat)):
+            self._write(packet)
+            if i + 1 < repeat:
+                time.sleep(0.06)
+
+    def disconnect(self) -> None:
+        """Drop the BLE link but keep the worker loop alive, so the next
+        write can bring it back.
+
+        On this board the servos appear to release when the link goes away,
+        which is what actually makes the arm limp — the CMD_SERVO_STOP
+        unload on its own does not seem to. Disconnecting is therefore the
+        reliable way to take the current off, and reconnecting is cheap
+        because the address is cached.
+        """
+        if self._client is not None:
+            try:
+                self._run(self._client.disconnect())
+            except Exception:  # noqa: BLE001 - already gone is the outcome we want
+                pass
+        self._client = None
+        self._char = None
+
     def close(self) -> None:
         if self._client is not None:
-            self._run(self._client.disconnect())
+            try:
+                self._run(self._client.disconnect())
+            except Exception:  # noqa: BLE001 - closing anyway
+                pass
         self._loop.call_soon_threadsafe(self._loop.stop)
