@@ -47,6 +47,20 @@ def _cached_address() -> str | None:
     return lines[0] if lines else None  # pre-tag cache from an older version
 
 
+async def _release(client: BleakClient) -> None:
+    """Hand a half-connected peripheral back to the OS.
+
+    A client whose connect was cancelled may still be connected, or about to
+    be. Disconnecting is the only way to tell the OS to let go; if we simply
+    drop the reference the arm can sit connected to nothing and stop
+    advertising, and no amount of scanning will find it again.
+    """
+    try:
+        await client.disconnect()
+    except Exception:  # noqa: BLE001 - it may never have opened; that is fine
+        pass
+
+
 def servo_move_packet(moves: list[tuple[int, int]], duration_ms: int) -> bytes:
     params = [len(moves), duration_ms & 0xFF, (duration_ms >> 8) & 0xFF]
     for sid, pos in moves:
@@ -68,6 +82,13 @@ class BleArm:
         name_hints: tuple[str, ...] = ("xarm", "hiwonder", "lobot"),
         timeout: float = 12.0,
     ) -> None:
+        # Only one thread may talk to the radio at a time. Two concurrent
+        # connects to the same address is how this link got wedged: both
+        # raced, one won at the OS level after its coroutine had already been
+        # cancelled, and the arm ended up connected to an object nothing held
+        # a reference to. A connected peripheral stops advertising, so every
+        # later scan found nothing until the process died and released it.
+        self._dialling = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._thread.start()
@@ -81,7 +102,8 @@ class BleArm:
         self.writes_done = 0
         self._last_write = None
         self.write_interval_ms = 0.0   # measured spacing of packets ACTUALLY leaving
-        self._run(self._connect(name_hints, timeout))
+        with self._dialling:
+            self._run(self._connect(name_hints, timeout))
 
     def _run(self, coro):  # noqa: ANN001, ANN202 - small internal helper
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
@@ -110,14 +132,17 @@ class BleArm:
         # wakes often enough that those seconds are the whole user experience.
         addr = _cached_address()
         if addr:
+            # Held in a local so a timeout can still close it. wait_for cancels
+            # the coroutine but cannot cancel the connect the OS has already
+            # started, so without this the peripheral can come up owned by an
+            # object we have thrown away -- and then it never advertises again.
+            client = BleakClient(addr, disconnected_callback=self._on_disconnect)
             try:
-                await asyncio.wait_for(
-                    self._bind(BleakClient(addr, disconnected_callback=self._on_disconnect), addr),
-                    timeout=6.0,
-                )
+                await asyncio.wait_for(self._bind(client, addr), timeout=6.0)
                 return
             except Exception:  # noqa: BLE001 - stale cache or asleep; fall back to a scan
                 self._client, self._char = None, None
+                await _release(client)
 
         device = None
         for attempt in range(1, attempts + 1):
@@ -143,10 +168,13 @@ class BleArm:
                 "script still running (pgrep -fl 'gloom.py|pose.py|teleop.py')?"
             )
         ADDRESS_CACHE.write_text(f"{_sys.platform}\n{device.address}\n")
-        await self._bind(
-            BleakClient(device, disconnected_callback=self._on_disconnect),
-            f"{device.name} ({device.address})",
-        )
+        client = BleakClient(device, disconnected_callback=self._on_disconnect)
+        try:
+            await self._bind(client, f"{device.name} ({device.address})")
+        except Exception:
+            self._client, self._char = None, None
+            await _release(client)
+            raise
 
     def _on_disconnect(self, _client: BleakClient) -> None:
         # Fast multi-servo moves can brown out the controller's radio; the
@@ -159,7 +187,17 @@ class BleArm:
 
     def reconnect(self) -> None:
         """Re-establish the link (the board keeps its address, so this is
-        usually a 1-2 s directed connect rather than a scan)."""
+        usually a 1-2 s directed connect rather than a scan).
+
+        Serialised: a second caller waits and then finds the link already up,
+        rather than starting a competing connect to the same address.
+        """
+        with self._dialling:
+            if self.connected:
+                return
+            self._reconnect()
+
+    def _reconnect(self) -> None:
         print("arm: reconnecting...")
         try:
             if self._client is not None:

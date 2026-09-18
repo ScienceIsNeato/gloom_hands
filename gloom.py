@@ -487,14 +487,16 @@ class Backend:
 
         threading.Thread(target=go, daemon=True).start()
 
-    def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
+    def relax(self, quiet: bool = False, drop_link: bool = False) -> None:
         """Take the current off every servo, so the arm is limp and can be
         moved by hand.
 
         `drop_link` additionally disconnects, which was once thought to be
-        the only thing that truly releases this board. Off by default now:
-        the reconnect it forced caused more trouble than it was ever shown
-        to solve.
+        the only thing that truly releases this board. It is off BY DEFAULT,
+        and the default is the point: when it defaulted to True, one call
+        site that forgot to pass it silently dropped the link 60 s into every
+        sleep and undid the fix that was supposed to keep it. A flag whose
+        unsafe setting is what you get by forgetting it will be forgotten.
         """
         self.released = True
         self.link_dropped = bool(drop_link) and self._servo is None
@@ -534,7 +536,7 @@ class DryBackend:
     def stream(self, moves_deg: dict[int, float]) -> None:
         self.send(moves_deg, int(TICK * 1000))
 
-    def relax(self, quiet: bool = False, drop_link: bool = True) -> None:
+    def relax(self, quiet: bool = False, drop_link: bool = False) -> None:
         self.released = True
         self.link_dropped = bool(drop_link)
         if not quiet:
@@ -1311,7 +1313,7 @@ def main() -> None:
                         continue
                     if held < WAKE_AFTER_S:
                         if not arm.link_dropped and now - last_unload >= SLACK_REASSERT_S:
-                            arm.relax(quiet=True)
+                            arm.relax(quiet=True, drop_link=SLEEP_DROPS_LINK)
                             last_unload = now
                         if held > 0:
                             print(f"  asleep — face held {held:.1f}s of {WAKE_AFTER_S:.1f}s "

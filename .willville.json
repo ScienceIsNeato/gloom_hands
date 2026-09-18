@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Chasing missed faces on the new wide-angle camera. Grabbed real frames off it and scored them: the good detections and the junk are cleanly separated, so I pulled the cutoff down into the gap and it now catches every frame where someone is actually facing the camera.",
-    "direction": "The camera is aimed too high — most of the picture is ceiling — so the next win is physical aiming, not more tuning. Then a quiet-room recording to confirm it still never fires on nobody.",
+    "status": "Tracked down why the arm goes unreachable overnight. A minute into every nap it was quietly hanging up the very connection it was supposed to be holding, and then two parts of the program raced each other to redial and left the arm talking to nobody. Fixed all three steps and added a check so it cannot come back a fourth time.",
+    "direction": "Needs a real overnight sit to confirm it holds. Also still want to point the camera lower — it is aimed at the ceiling light, which is doing us no favours.",
     "last_update": "2026-09-17T00:00:00Z"
   }
 }

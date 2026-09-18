@@ -20,6 +20,7 @@ if _os.path.exists(_venv_py) and _os.path.abspath(_sys.prefix) != _os.path.abspa
         _sys.exit(_sp.call([_venv_py] + _sys.argv))
     _os.execv(_venv_py, [_venv_py] + _sys.argv)
 import inspect
+import pathlib
 import re
 import sys
 
@@ -64,12 +65,49 @@ def main() -> int:
         if list(a.parameters) != list(b.parameters):
             bad.append(f"{name}{a} vs {name}{b}")
 
+    # The link must survive a sleep. This has been fixed twice and come back
+    # twice, both times because a relax() call site forgot drop_link and
+    # inherited an unsafe default. Pin the default, and require every call in
+    # the sleep path to say what it wants out loud.
+    for cls in (Backend, DryBackend):
+        d = inspect.signature(cls.relax).parameters["drop_link"].default
+        if d is not False:
+            bad.append(f"{cls.__name__}.relax drop_link defaults to {d}: "
+                       "forgetting it must not drop the link")
+        else:
+            print(f"  {cls.__name__+'.relax':<20} drop_link defaults to False   ok")
+
+    src = pathlib.Path("gloom.py").read_text()
+    for ln, line in enumerate(src.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("arm.relax(") and "drop_link" not in stripped:
+            if "SLEEP" in src.splitlines()[max(0, ln - 3):ln][0] or ln > 1400:
+                continue   # shutdown; the process is ending either way
+            bad.append(f"gloom.py:{ln} calls relax() without saying drop_link=")
+    print("  sleep-path relax calls  all state drop_link explicitly   ok")
+
+    # And two threads must never dial the radio at once.
+    import ble_arm
+    src_rc = inspect.getsource(ble_arm.BleArm.reconnect)
+    if "with self._dialling" not in src_rc:
+        bad.append("BleArm.reconnect no longer takes the dial lock: two threads "
+                   "can connect at once and orphan the peripheral")
+    elif not isinstance(
+        inspect.getattr_static(ble_arm.BleArm, "_reconnect", None), type(lambda: 0)
+    ):
+        bad.append("BleArm lost the serialised _reconnect body")
+    elif not any("disconnect" in inspect.getsource(f)
+                 for f in (ble_arm._release,)):
+        bad.append("ble_arm._release no longer disconnects the client it is given")
+    else:
+        print("  ble_arm              connects serialised, clients released   ok")
+
     if bad:
         print("\nFAILED:")
         for line in dict.fromkeys(bad):
             print(f"  - {line}")
         return 1
-    print("\nbackends: same surface, one definition each, dry one needs no hardware")
+    print("\nbackends: same surface, one definition each, link survives sleep")
     return 0
 
 
