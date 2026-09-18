@@ -1,7 +1,7 @@
 {
   "agent": {
-    "status": "Tracked down why the arm goes unreachable overnight. A minute into every nap it was quietly hanging up the very connection it was supposed to be holding, and then two parts of the program raced each other to redial and left the arm talking to nobody. Fixed all three steps and added a check so it cannot come back a fourth time.",
-    "direction": "Needs a real overnight sit to confirm it holds. Also still want to point the camera lower — it is aimed at the ceiling light, which is doing us no favours.",
-    "last_update": "2026-09-17T00:00:00Z"
+    "status": "Pulled the strike back another notch so the arm does not stretch out quite as far when it lunges — that is the part that was making a servo complain. Wrote down the actual numbers this time so the next person can see how much that dial really buys.",
+    "direction": "See whether it still complains after a few lunges. If it does, the dial is not the answer and the real lever is how long it sits out there versus curled up.",
+    "last_update": "2026-09-18T00:00:00Z"
   }
 }

@@ -213,14 +213,27 @@ LURCH_MS = 500               # how fast it comes out at you (small = violent; be
 # the lunge landing. Put it back on servo 5 if you want the old violence and
 # have the power budget for it.
 # HOW FAR THE STRIKE REACHES, as a fraction of the way from the coil to the
-# full point pose. The alarm has always fired at the END of a lurch, which is
-# the instant the arm arrives at its longest and has to hold there: maximum
-# moment at the shoulder, right after a fast move. Landing short of full
-# extension cuts that holding torque and is the one dial that acts on exactly
-# the moment that fails. 1.0 is the old behaviour.
-LURCH_REACH = 0.90
+# full point pose. The alarm fires once the arm is out at its longest -- and
+# it is not an instant. The arm LANDS here and then holds this pose, tracking,
+# for COIL_EVERY_S (11-24 s), with the writhe running on top. An overload
+# alarm is sustained-current protection, so what trips it is the hold, not the
+# arrival.
+#
+# Worked out from the measured link lengths, taking each link's weight at its
+# midpoint and the gripper at the tip -- horizontal moment about the shoulder,
+# relative to the coiled pose:
+#       coiled 3.10in   1.0x        0.90 -> 9.33in  14.4x
+#       0.81 -> 8.69in  13.0x       1.00 -> 9.97in  15.8x
+# Note how flat that is: this dial trades roughly 1:1 with torque, so a 10%
+# cut buys ~10%, off a load that is thirteen times the resting one. It has now
+# been stepped down 1.00 -> 0.90 -> 0.81, each step ~10% of the extension
+# beyond the coil. If it sings again, this dial is not the answer -- the
+# thing that actually dominates is how LONG it holds out here (COIL_EVERY_S)
+# versus coiled (COIL_HOLD_S), and today it holds out five times longer than
+# it stays coiled.
+LURCH_REACH = 0.81
 LURCH_OVERSHOOT_JOINT = 3    # 3 = wrist (cheap), 5 = shoulder (what used to sing)
-LURCH_OVERSHOOT_DEG = 14.0   # past the point pose as the lunge lands...
+LURCH_OVERSHOOT_DEG = 12.6   # past the point pose as the lunge lands, cut with the reach...
 SETTLE_MS = 450              # ...then settles back over this long
 GREET_HOLD_S = 3.0           # the first sighting: rise into the coil, writhe this long,
                              # then strike. An entrance, rather than just switching on.
